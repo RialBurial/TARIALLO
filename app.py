@@ -26,12 +26,7 @@ st.set_page_config(page_title="Radar Fundamental Pro", page_icon="📈", layout=
 # ==========================================
 st.markdown("""
 <style>
-    /* Hacemos la cabecera transparente en lugar de invisible para no perder el botón del menú en móvil */
-    header[data-testid="stHeader"] {
-        background-color: transparent !important;
-    }
-    
-    /* Ocultamos el menú default de Streamlit de la derecha y el pie de página */
+    header[data-testid="stHeader"] { background-color: transparent !important; }
     #MainMenu {visibility: hidden;}
     footer {visibility: hidden;}
     
@@ -139,7 +134,7 @@ def calcular_dcf_rapido(fcf, growth_rate, shares, discount_rate):
     val_presente += terminal_value / ((1 + discount_rate)**5)
     return val_presente / shares
 
-# --- FUNCIÓN BLINDADA Y HÍBRIDA (YFINANCE + FMP API) ---
+# --- FUNCIÓN BLINDADA Y HÍBRIDA ---
 def obtener_datos_empresa(ticker, api_key=None):
     stock = yf.Ticker(ticker)
     try:
@@ -215,13 +210,13 @@ def obtener_datos_empresa(ticker, api_key=None):
         discount_rate = risk_free_rate + (beta * market_premium)
         discount_rate = max(0.07, min(discount_rate, 0.15)) 
         
-        # --- EXTRACCIÓN DEL DCF OFICIAL VÍA FMP API (SI EXISTE LA CLAVE) ---
         valor_dcf = 0
         if api_key:
             try:
-                url_dcf = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={api_key}"
+                api_key_clean = api_key.strip()
+                url_dcf = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={api_key_clean}"
                 res_dcf = requests.get(url_dcf).json()
-                if len(res_dcf) > 0 and 'dcf' in res_dcf[0]:
+                if isinstance(res_dcf, list) and len(res_dcf) > 0 and 'dcf' in res_dcf[0]:
                     valor_dcf = float(res_dcf[0]['dcf'])
                 else:
                     valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
@@ -229,7 +224,6 @@ def obtener_datos_empresa(ticker, api_key=None):
                 valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
         else:
             valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
-        # -------------------------------------------------------------------
 
         valor_liquidacion = (activo_corriente - deuda_total) / shares if shares > 1 else 0
 
@@ -505,23 +499,37 @@ def obtener_datos_tecnicos(tickers_list):
             pass
     return pd.DataFrame(resultados)
 
+# --- NUEVO SISTEMA ANTI-ERRORES PARA FMP ---
 def obtener_tickers_fmp(api_key, mercado, sector, mcap, limite):
-    base_url = "https://financialmodelingprep.com/api/v3/stock-screener?"
-    params = [f"apikey={api_key}", f"limit={limite}", "isActivelyTrading=true"]
+    base_url = "https://financialmodelingprep.com/api/v3/stock-screener"
     
-    if mercado == "Wall Street (NYSE, NASDAQ)": params.append("exchange=NYSE,NASDAQ")
-    elif mercado == "Europa (EURONEXT, XETRA, LSE)": params.append("exchange=EURONEXT,XETRA,LSE")
+    api_key_clean = api_key.strip()
+    
+    params = {
+        "apikey": api_key_clean,
+        "limit": limite,
+        "isActivelyTrading": "true"
+    }
+    
+    if mercado == "Wall Street (NYSE, NASDAQ)": params["exchange"] = "NYSE,NASDAQ"
+    elif mercado == "Europa (EURONEXT, XETRA, LSE)": params["exchange"] = "EURONEXT,XETRA,LSE"
         
-    if sector != "Todos": params.append(f"sector={sector}")
+    if sector != "Todos": params["sector"] = sector
         
-    if mcap == "> 2 Billones ($)": params.append("marketCapMoreThan=2000000000")
-    elif mcap == "> 10 Billones ($)": params.append("marketCapMoreThan=10000000000")
+    if mcap == "> 2 Billones ($)": params["marketCapMoreThan"] = 2000000000
+    elif mcap == "> 10 Billones ($)": params["marketCapMoreThan"] = 10000000000
         
-    url = base_url + "&".join(params)
     try:
-        res = requests.get(url).json()
-        return [item['symbol'] for item in res] if isinstance(res, list) else []
-    except:
+        res = requests.get(base_url, params=params)
+        data = res.json()
+        
+        if isinstance(data, dict) and "Error Message" in data:
+            st.error(f"🛑 FMP dice: {data['Error Message']}")
+            return []
+            
+        return [item['symbol'] for item in data] if isinstance(data, list) else []
+    except Exception as e:
+        st.error(f"🛑 Error de conexión con FMP: {e}")
         return []
 
 def obtener_tickers_indice(indice):
@@ -566,13 +574,32 @@ def obtener_tickers_indice(indice):
             for t in tablas:
                 res = extraer_columna_ticker(t)
                 if res and len(res) > 20: return [f"{str(x).replace('.MC', '')}.MC" for x in res]
+        elif indice == "DAX 40 (Alemania)":
+            html = requests.get('https://en.wikipedia.org/wiki/DAX', headers=headers).text
+            tablas = pd.read_html(io.StringIO(html))
+            for t in tablas:
+                res = extraer_columna_ticker(t)
+                if res and len(res) > 20: return [f"{str(x).replace('.', '-')}.DE" for x in res]
+        elif indice == "CAC 40 (Francia)":
+            html = requests.get('https://en.wikipedia.org/wiki/CAC_40', headers=headers).text
+            tablas = pd.read_html(io.StringIO(html))
+            for t in tablas:
+                res = extraer_columna_ticker(t)
+                if res and len(res) > 20: return [f"{str(x).replace('.', '-')}.PA" for x in res]
+        elif indice == "FTSE 100 (Reino Unido)":
+            html = requests.get('https://en.wikipedia.org/wiki/FTSE_100_Index', headers=headers).text
+            tablas = pd.read_html(io.StringIO(html))
+            for t in tablas:
+                res = extraer_columna_ticker(t)
+                if res and len(res) > 50: return [f"{str(x).replace('.', '-')}.L" for x in res]
         elif "SECTOR:" in indice:
             html = requests.get('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=headers).text
             tablas = pd.read_html(io.StringIO(html))
             df_sp = tablas[0]
             sectores_gics = {
                 "SECTOR: Tecnología": "Information Technology", "SECTOR: Salud": "Health Care",
-                "SECTOR: Finanzas": "Financials", "SECTOR: Consumo Cíclico": "Consumer Discretionary"
+                "SECTOR: Finanzas": "Financials", "SECTOR: Consumo Cíclico": "Consumer Discretionary",
+                "SECTOR: Consumo Defensivo": "Consumer Staples", "SECTOR: Energía": "Energy"
             }
             for col in df_sp.columns:
                 col_name = str(col).lower()
@@ -625,7 +652,6 @@ with st.sidebar:
     
     st.divider()
     
-    # --- SCREENER INSTITUCIONAL (NUEVO) ---
     with st.expander("📡 Screener Institucional (FMP)", expanded=True):
         if api_key:
             fmp_mercado = st.selectbox("Mercado:", ["Wall Street (NYSE, NASDAQ)", "Europa (EURONEXT, XETRA, LSE)", "Cualquiera"])
@@ -638,8 +664,6 @@ with st.sidebar:
                 tickers_fmp = obtener_tickers_fmp(api_key, fmp_mercado, fmp_sector, fmp_mcap, fmp_limite)
                 if tickers_fmp: 
                     escanear_lista_tickers(tickers_fmp, fmp_filtro_activo, api_key)
-                else:
-                    st.error("No se encontraron empresas o la API Key es incorrecta.")
         else:
             st.warning("Introduce tu API Key arriba para desbloquear el screener avanzado.")
 
