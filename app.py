@@ -460,6 +460,69 @@ def generar_pdf_tearsheet(datos, col_precio):
     except TypeError:
         return pdf.output(dest='S').encode('latin-1') 
 
+def plot_radar(datos_empresa):
+    def limpiar_num(val):
+        try: return float(str(val).split()[0])
+        except: return 0.0
+
+    acida = limpiar_num(datos_empresa['Prueba Ácida (>1)'])
+    deuda = limpiar_num(datos_empresa['Deuda/Patr. (<1)'])
+    roic = limpiar_num(datos_empresa['ROIC % (>12%)'])
+    margen_fcf = limpiar_num(datos_empresa['Margen FCF % (>10%)'])
+    pfcf = limpiar_num(datos_empresa[col_pfcf_header])
+
+    s_liquidez = min(10, acida * 10)
+    s_deuda = 10 if deuda < 0.2 else max(0, 10 - (deuda * 5))
+    s_calidad = min(10, (roic / 15.0) * 10)
+    s_caja = min(10, (margen_fcf / 15.0) * 10)
+    s_valoracion = 10 if 0 < pfcf <= 15 else max(0, 10 - (abs(15 - pfcf) / 3))
+
+    categorias = ['Liquidez (Ácida)', 'Solvencia (Deuda)', 'Calidad (ROIC)', 'Eficiencia (Caja)', 'Valoración (P/FCF)']
+    valores = [s_liquidez, s_deuda, s_calidad, s_caja, s_valoracion]
+    
+    fig = go.Figure()
+    fig.add_trace(go.Scatterpolar(
+        r=valores + [valores[0]], theta=categorias + [categorias[0]],
+        fill='toself', name=datos_empresa['Ticker'],
+        line_color='#E50914', fillcolor='rgba(229, 9, 20, 0.3)'
+    ))
+    fig.update_layout(
+        template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+        polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
+        showlegend=False, margin=dict(l=40, r=40, t=20, b=20), height=350
+    )
+    return fig
+
+def plot_historico(ticker):
+    stock = yf.Ticker(ticker)
+    try:
+        fin = stock.financials
+        cf = stock.cashflow
+        if fin.empty: return None
+        
+        años = [str(x)[:4] for x in fin.columns[:4]][::-1]
+        ventas = (fin.loc['Total Revenue'][:4] / 1e9).tolist()[::-1] if 'Total Revenue' in fin.index else [0]*4
+        neto = (fin.loc['Net Income'][:4] / 1e9).tolist()[::-1] if 'Net Income' in fin.index else [0]*4
+        
+        if 'Free Cash Flow' in cf.index:
+            fcf = (cf.loc['Free Cash Flow'][:4] / 1e9).tolist()[::-1]
+        else:
+            op_cash = cf.loc['Total Cash From Operating Activities'][:4] if 'Total Cash From Operating Activities' in cf.index else pd.Series([0]*4)
+            capex = cf.loc['Capital Expenditure'][:4] if 'Capital Expenditure' in cf.index else pd.Series([0]*4)
+            fcf = ((op_cash + capex) / 1e9).tolist()[::-1]
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(x=años, y=ventas, name='Ingresos', marker_color='#333333'))
+        fig.add_trace(go.Bar(x=años, y=neto, name='Bº Neto', marker_color='#E50914'))
+        fig.add_trace(go.Scatter(x=años, y=fcf, name='Free Cash Flow', line=dict(color='#00CC96', width=3), mode='lines+markers'))
+        
+        fig.update_layout(
+            template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            barmode='group', title="Evolución Histórica (Miles Millones)", height=350, margin=dict(l=20, r=20, t=40, b=20)
+        )
+        return fig
+    except: return None
+
 # ==========================================
 # FUNCIONES: TÉCNICO Y FMP SCREENER
 # ==========================================
