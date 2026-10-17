@@ -1,1005 +1,494 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import math
-import io
-import requests
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from scipy.optimize import minimize
 import plotly.graph_objects as go
-from datetime import datetime
-import os
-import ta
+from itertools import combinations
+from datetime import datetime, timedelta
 
-# Intentamos importar la librería para generar PDFs.
-try:
-    from fpdf import FPDF
-    fpdf_disponible = True
-except ModuleNotFoundError:
-    fpdf_disponible = False
+# Configuración general de la página
+st.set_page_config(
+    page_title="Cross-Returns Quant Analyzer",
+    page_icon="📈",
+    layout="wide"
+)
 
-# ==========================================
-# CONFIGURACIÓN DE LA PÁGINA
-# ==========================================
-st.set_page_config(page_title="Radar Fundamental Pro", page_icon="📈", layout="wide")
+st.title("📈 Analizador Cuantitativo de Retornos Cruzados y Fuerza Relativa")
+st.markdown(
+    "Herramienta universal para predecir retornos futuros de **Índices, Acciones, Forex, Materias Primas y Cripto** "
+    "utilizando *Distributed Lags* (Retornos Cruzados) y modelos de Fuerza Relativa."
+)
 
-# ==========================================
-# INYECCIÓN DE ESTILOS CSS (DISEÑO PREMIUM NEGRO/ROJO)
-# ==========================================
-st.markdown("""
-<style>
-    header[data-testid="stHeader"] { background-color: transparent !important; }
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    
-    .stApp { background-color: #0e1117; color: #ffffff; }
-    
-    .metric-card-principal {
-        background-color: #1a1c23; border-left: 5px solid #E50914;
-        padding: 25px; border-radius: 10px; box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-        text-align: center; margin-bottom: 20px;
+# ---------------------------------------------------------
+# MÓDULO A: PANEL LATERAL DE CONFIGURACIÓN
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ 1. Selección de Activos")
+
+presets = {
+    "Índices EE.UU. + Sectores y Macro": {
+        "target": "SPY",
+        "predictors": "QQQ, IWM, TLT, GLD, ^VIX, XLF, XLK, XLE, NVDA, AAPL"
+    },
+    "Gigantes Tecnológicos (Acciones)": {
+        "target": "NVDA",
+        "predictors": "AMD, TSM, MSFT, AAPL, META, GOOGL, AMZN, QQQ, SMH"
+    },
+    "Índices Globales y Divisas": {
+        "target": "^GDAXI",
+        "predictors": "SPY, ^STOXX50E, ^IBEX, ^N225, EURUSD=X, GC=F, CL=F"
+    },
+    "Cripto (Ejemplo del Vídeo MemLabs)": {
+        "target": "ETH-USD",
+        "predictors": "BNB-USD, SOL-USD, BTC-USD, UNI7083-USD, AAVE-USD, LINK-USD, AVAX-USD"
+    },
+    "Personalizado (Escribir libremente)": {
+        "target": "SPY",
+        "predictors": "QQQ, TLT, GLD, ^VIX"
     }
-    .metric-card-secundaria {
-        background-color: #1a1c23; border-left: 3px solid #555555;
-        padding: 15px; border-radius: 10px; text-align: center; margin-bottom: 20px;
-    }
-    .metric-title {
-        color: #a0a0a0; font-size: 14px; font-weight: bold; text-transform: uppercase;
-        margin-bottom: 5px; letter-spacing: 1px;
-    }
-    .metric-value-xl {
-        color: #E50914; font-size: 42px; font-weight: 900; margin: 5px 0; letter-spacing: 2px;
-    }
-    .metric-value-md { color: #ffffff; font-size: 26px; font-weight: bold; margin: 5px 0; }
-    .metric-subtitle { color: #00CC96; font-size: 16px; font-weight: bold; }
-</style>
-""", unsafe_allow_html=True)
+}
 
-fecha_hoy = datetime.now().strftime('%Y-%m-%d')
-col_precio_header = f'Precio [{fecha_hoy}]'
-col_pfcf_header = 'P/FCF (Opt <22)'
+preset_choice = st.sidebar.selectbox("Plantillas rápidas de mercado:", list(presets.keys()))
 
-ARCHIVO_AUTOGUARDADO = "Radar_Autoguardado.xlsx"
+target_ticker = st.sidebar.text_input(
+    "🎯 Activo Objetivo a Operar (X):",
+    value=presets[preset_choice]["target"],
+    help="Escribe cualquier ticker de Yahoo Finance (ej. SPY, NVDA, ^IBEX, BTC-USD, GC=F)."
+).strip().upper()
 
-# ESTADOS DE MEMORIA
-if 'portfolio_df' not in st.session_state:
-    try:
-        df_guardado = pd.read_excel(ARCHIVO_AUTOGUARDADO)
-        st.session_state.portfolio_df = df_guardado
-    except Exception:
-        st.session_state.portfolio_df = pd.DataFrame()
+predictors_input = st.sidebar.text_area(
+    "🔗 Universo de Activos Predictores / Candidatos (Y):",
+    value=presets[preset_choice]["predictors"],
+    help="Separados por coma. Se usarán tanto para tu análisis manual como para el escáner automático."
+)
 
-if 'tech_df' not in st.session_state:
-    st.session_state.tech_df = pd.DataFrame()
+candidate_tickers = [t.strip().upper() for t in predictors_input.split(",") if t.strip() and t.strip().upper() != target_ticker]
 
-if 'uploader_key' not in st.session_state:
-    st.session_state.uploader_key = "llave_inicial"
+selected_predictors = st.sidebar.multiselect(
+    "✅ Activos activos para el Modelo Manual:",
+    options=candidate_tickers,
+    default=candidate_tickers[:3] if len(candidate_tickers) >= 3 else candidate_tickers
+)
 
-# ==========================================
-# FUNCIONES AUXILIARES (Análisis Fundamental)
-# ==========================================
-def calcular_cagr(valor_final, valor_inicial, periodos=3):
-    if pd.isna(valor_final) or pd.isna(valor_inicial): return 0.0
-    if valor_inicial <= 0: 
-        if valor_final > 0: return 0.20 
-        else: return 0.0 
-    return ((valor_final / valor_inicial) ** (1 / periodos)) - 1
+st.sidebar.header("⏱️ 2. Parámetros del Modelo")
 
-def calcular_nota_y_etiquetas(ratios):
-    nota = 0
-    tags = []
-    
-    if ratios.get('prueba_acida', 0) > 1: nota += 1
-    if 0 <= ratios.get('deuda_patrimonio', 99) < 1: nota += 1
-    if ratios.get('cobertura_intereses', 0) > 4: nota += 1
-    
-    if ratios.get('roic', 0) > 12: nota += 1
-    if ratios.get('margen_neto', 0) > 10: nota += 1
-    
-    if ratios.get('margen_fcf', 0) > 10: nota += 1
-    if ratios.get('utilidad_neta', 0) > 0 and ratios.get('fcf', 0) > 0:
-        if (ratios['fcf'] / ratios['utilidad_neta']) > 0.8: nota += 1
-        
-    if ratios.get('cagr_ventas', 0) > 5: nota += 1
-    if ratios.get('cagr_beneficios', 0) > 5: nota += 1
-    
-    if 0 < ratios.get('price_fcf', 999) < 22: nota += 1
-    
-    if ratios.get('deuda_patrimonio', 0) < 0.3 and ratios.get('prueba_acida', 0) > 1.5: 
-        tags.append("Fortaleza Financiera")
-    elif ratios.get('deuda_patrimonio', 0) > 2 or ratios.get('prueba_acida', 0) < 0.8: 
-        tags.append("RIESGO LIQUIDEZ/DEUDA")
-        
-    if ratios.get('roic', 0) > 15 and ratios.get('margen_fcf', 0) > 15: 
-        tags.append("Foso Económico (Moat)")
-        
-    if 0 < ratios.get('price_fcf', 0) < 12: 
-        tags.append("Ganga por FCF")
-    elif ratios.get('price_fcf', 0) > 30: 
-        tags.append("Sobrevalorada")
-        
-    return nota, " | ".join(tags) if tags else "Estándar"
+horizon = st.sidebar.slider(
+    "Horizonte de Retorno / Predicción (Días):",
+    min_value=1, max_value=30, value=7,
+    help="En el vídeo se usan 7 días (retornos semanales). Puedes bajarlo a 1-3 días para swing corto o subirlo a 15-20."
+)
 
-def calcular_dcf_rapido(fcf, growth_rate, shares, discount_rate):
-    if fcf <= 0 or shares <= 0: return 0
-    terminal_growth = 0.025 
-    if growth_rate > 0.25: growth_rate = 0.25 
-    if growth_rate < 0: growth_rate = 0.02
-        
-    val_presente = 0
-    fcf_proyectado = fcf
-    for i in range(1, 6):
-        fcf_proyectado *= (1 + growth_rate)
-        val_presente += fcf_proyectado / ((1 + discount_rate)**i)
-        
-    terminal_value = (fcf_proyectado * (1 + terminal_growth)) / (discount_rate - terminal_growth)
-    val_presente += terminal_value / ((1 + discount_rate)**5)
-    return val_presente / shares
+years_back = st.sidebar.slider(
+    "Histórico de datos a descargar (Años):",
+    min_value=1, max_value=10, value=4
+)
 
-# --- FUNCIÓN BLINDADA Y HÍBRIDA ---
-def obtener_datos_empresa(ticker, api_key=None):
-    stock = yf.Ticker(ticker)
-    try:
-        balance = stock.balance_sheet
-        financials = stock.financials
-        cashflow = stock.cashflow
-        if balance.empty or financials.empty: return None
+train_Pct = st.sidebar.slider(
+    "División Entrenamiento / Prueba (Train %):",
+    min_value=50, max_value=90, value=70, step=5,
+    help="Porcentaje del pasado usado para aprender los pesos. El resto (Test) valida si gana dinero hoy."
+)
 
-        info = stock.info if stock.info else {}
+include_ar = st.sidebar.checkbox(
+    "Incluir propio activo en el modelo (Modelo Mixto ARDL)",
+    value=False,
+    help="Añade el retorno actual del activo objetivo junto a los activos cruzados."
+)
 
-        try:
-            precio_accion = float(stock.fast_info.last_price)
-            shares = float(stock.fast_info.shares)
-        except:
-            hist = stock.history(period="5d")
-            precio_accion = float(hist['Close'].iloc[-1]) if not hist.empty else 0
-            shares = info.get('sharesOutstanding', 1)
+force_rs = st.sidebar.checkbox(
+    "Forzar restricción de Fuerza Relativa (+/-)",
+    value=False,
+    help="Obliga matemáticamente a que al menos un predictor tenga peso positivo y otro negativo."
+)
 
-        if info.get('currency') == 'GBp': 
-            precio_accion = precio_accion / 100
-
-        nombre_empresa = info.get('longName', info.get('shortName', ticker)) if info.get('shortName') else ticker
-        sector = info.get('sector', 'Desconocido')
-        beta = info.get('beta', 1.0)
-        
-        activo_corriente = balance.loc['Current Assets'].iloc[0] if 'Current Assets' in balance.index else 0
-        pasivo_corriente = balance.loc['Current Liabilities'].iloc[0] if 'Current Liabilities' in balance.index else 0
-        inventarios = balance.loc['Inventory'].iloc[0] if 'Inventory' in balance.index else 0
-        activo_total = balance.loc['Total Assets'].iloc[0]
-        
-        if 'Total Debt' in balance.index: deuda_total = balance.loc['Total Debt'].iloc[0]
-        elif 'Total Liabilities Net Minority Interest' in balance.index: deuda_total = balance.loc['Total Liabilities Net Minority Interest'].iloc[0]
-        elif 'Total Liabilities' in balance.index: deuda_total = balance.loc['Total Liabilities'].iloc[0]
-        else: deuda_total = 0
-            
-        patrimonio = balance.loc['Stockholders Equity'].iloc[0] if 'Stockholders Equity' in balance.index else (activo_total - deuda_total)
-        
-        ventas = financials.loc['Total Revenue'].iloc[0] if 'Total Revenue' in financials.index else 0
-        utilidad_neta = financials.loc['Net Income'].iloc[0] if 'Net Income' in financials.index else 0
-        ebit = financials.loc['Ebit'].iloc[0] if 'Ebit' in financials.index else utilidad_neta
-        gastos_financieros = financials.loc['Interest Expense'].iloc[0] if 'Interest Expense' in financials.index else 1
-        
-        if len(financials.columns) >= 4:
-            cagr_ventas = calcular_cagr(ventas, financials.loc['Total Revenue'].iloc[3], 3) * 100
-            cagr_beneficio = calcular_cagr(utilidad_neta, financials.loc['Net Income'].iloc[3], 3) * 100
-        else: 
-            cagr_ventas, cagr_beneficio = 0, 0
-
-        fcf = info.get('freeCashflow', None)
-        if fcf is None and not cashflow.empty:
-            op_cash = cashflow.loc['Total Cash From Operating Activities'].iloc[0] if 'Total Cash From Operating Activities' in cashflow.index else 0
-            capex = cashflow.loc['Capital Expenditure'].iloc[0] if 'Capital Expenditure' in cashflow.index else 0
-            fcf = op_cash + capex
-            
-        price_fcf = ((precio_accion * shares) / fcf) if fcf and fcf > 0 else 0
-        if fcf and fcf < 0: price_fcf = -1
-
-        div_pagados = 0
-        if 'Cash Dividends Paid' in cashflow.index: div_pagados = abs(cashflow.loc['Cash Dividends Paid'].iloc[0])
-        elif 'Dividends Paid' in cashflow.index: div_pagados = abs(cashflow.loc['Dividends Paid'].iloc[0])
-            
-        market_cap = precio_accion * shares
-        div_yield = (div_pagados / market_cap) * 100 if market_cap > 0 else 0
-        payout_ratio = (div_pagados / utilidad_neta) * 100 if utilidad_neta > 0 else 0
-
-        eps = utilidad_neta / shares if shares > 1 else 0
-        valor_libro_accion = patrimonio / shares if shares > 1 else 0
-        valor_graham = math.sqrt(22.5 * eps * valor_libro_accion) if (eps > 0 and valor_libro_accion > 0) else 0
-
-        est_growth = info.get('earningsGrowth', 0.05) if info.get('earningsGrowth') else 0.05
-        risk_free_rate = 0.042
-        market_premium = 0.055 
-        discount_rate = risk_free_rate + (beta * market_premium)
-        discount_rate = max(0.07, min(discount_rate, 0.15)) 
-        
-        valor_dcf = 0
-        if api_key:
-            try:
-                api_key_clean = api_key.strip()
-                url_dcf = f"https://financialmodelingprep.com/api/v3/discounted-cash-flow/{ticker}?apikey={api_key_clean}"
-                res_dcf = requests.get(url_dcf).json()
-                if isinstance(res_dcf, list) and len(res_dcf) > 0 and 'dcf' in res_dcf[0]:
-                    valor_dcf = float(res_dcf[0]['dcf'])
-                else:
-                    valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
-            except:
-                valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
-        else:
-            valor_dcf = calcular_dcf_rapido(fcf, est_growth, shares, discount_rate)
-
-        valor_liquidacion = (activo_corriente - deuda_total) / shares if shares > 1 else 0
-
-        tasa_impositiva = 0.25 
-        capital_invertido = deuda_total + patrimonio
-        roic = ((ebit * (1 - tasa_impositiva)) / capital_invertido) * 100 if capital_invertido > 0 else 0
-
-        ratios_raw = {
-            'prueba_acida': (activo_corriente - inventarios) / pasivo_corriente if pasivo_corriente else 0,
-            'deuda_patrimonio': deuda_total / patrimonio if patrimonio > 0 else 0,
-            'cobertura_intereses': ebit / abs(gastos_financieros) if gastos_financieros != 0 else 0,
-            'roic': roic,
-            'margen_neto': (utilidad_neta / ventas) * 100 if ventas else 0,
-            'margen_fcf': (fcf / ventas) * 100 if ventas and fcf else 0,
-            'utilidad_neta': utilidad_neta,
-            'fcf': fcf,
-            'cagr_ventas': cagr_ventas,
-            'cagr_beneficios': cagr_beneficio,
-            'price_fcf': price_fcf
-        }
-        
-        nota, etiquetas = calcular_nota_y_etiquetas(ratios_raw)
-
-        return {
-            'Ticker': ticker, 'Nombre': nombre_empresa, 'Sector': sector, col_precio_header: precio_accion,
-            'Valor Intrínseco (DCF)': round(valor_dcf, 2),
-            'WACC %': round(discount_rate * 100, 2),
-            'Beta': round(beta, 2),
-            'Valor de Liquidación': round(valor_liquidacion, 2),
-            'Valor Graham': round(valor_graham, 2), 'Div. Yield %': round(div_yield, 2),
-            'Payout %': round(payout_ratio, 2), col_pfcf_header: round(price_fcf, 2),
-            'Prueba Ácida (>1)': round(ratios_raw['prueba_acida'], 2),
-            'Deuda/Patr. (<1)': round(ratios_raw['deuda_patrimonio'], 2),
-            'Cob. Intereses (>4)': round(ratios_raw['cobertura_intereses'], 2),
-            'ROIC % (>12%)': round(ratios_raw['roic'], 2),
-            'Margen Neto % (>10%)': round(ratios_raw['margen_neto'], 2),
-            'Margen FCF % (>10%)': round(ratios_raw['margen_fcf'], 2),
-            'FCF/Beneficio (>0.8)': round(ratios_raw['fcf'] / ratios_raw['utilidad_neta'], 2) if ratios_raw['utilidad_neta'] > 0 else 0,
-            'CAGR Ventas 3y % (>5%)': round(ratios_raw['cagr_ventas'], 2),
-            'CAGR Benef. 3y % (>5%)': round(ratios_raw['cagr_beneficios'], 2),
-            'FCF (Millones)': round(fcf / 1_000_000, 2) if fcf else 0,
-            'Beneficio Neto (Millones)': round(utilidad_neta / 1_000_000, 2),
-            'Nota (/10)': nota, 'Etiquetas': etiquetas
-        }
-    except Exception as e: 
-        return None
-
-def aplicar_simbolos_sectoriales(df):
-    df_mod = df.copy()
-    ratios_relativos = {
-        'ROIC % (>12%)': True, 'Margen FCF % (>10%)': True,
-        col_pfcf_header: False, 'Deuda/Patr. (<1)': False
-    }
-    for ratio in ratios_relativos.keys():
-        if ratio in df_mod.columns: df_mod[ratio] = df_mod[ratio].astype(object)
-    
-    for sector in df_mod['Sector'].unique():
-        if sector == 'Desconocido': continue
-        filtro = df_mod['Sector'] == sector
-        df_sector = df_mod[filtro]
-        if len(df_sector) < 2: continue
-            
-        for ratio, mayor_es_mejor in ratios_relativos.items():
-            valores_num = pd.to_numeric(df_sector[ratio], errors='coerce')
-            if ratio == col_pfcf_header: valores_validos = valores_num[valores_num > 0]
-            else: valores_validos = valores_num.dropna()
-                
-            if valores_validos.empty: continue
-            
-            media_sector = valores_validos.mean()
-            mejor_valor = valores_validos.max() if mayor_es_mejor else valores_validos.min()
-            margen_sup = media_sector * 1.15
-            margen_inf = media_sector * 0.85
-            
-            for idx in df_sector.index:
-                valor = df_mod.loc[idx, ratio]
-                try: valor_num = float(valor)
-                except: continue
-                
-                if pd.isna(valor_num) or (valor_num == 0 and ratio == col_pfcf_header): continue
-                    
-                simbolo = ""
-                if valor_num == mejor_valor: simbolo = "★ TOP"
-                elif mayor_es_mejor:
-                    if valor_num > margen_sup: simbolo = "▲"
-                    elif valor_num < margen_inf: simbolo = "▼"
-                    else: simbolo = "▬"
-                else: 
-                    if valor_num < margen_inf: simbolo = "▲"
-                    elif valor_num > margen_sup: simbolo = "▼"
-                    else: simbolo = "▬"
-                    
-                df_mod.loc[idx, ratio] = f"{valor_num} {simbolo}".strip()
-    return df_mod
-
-def aplicar_estilos(df):
-    verde = 'background-color: #0b3d0b; color: #85e085'
-    rojo = 'background-color: #4a0000; color: #ff6666'
-    azul_claro = 'background-color: #002244; color: #66b3ff; font-weight: bold'
-    
-    def limpiar_num(val):
-        try: return float(str(val).split()[0])
-        except: return 0.0
-
-    df_styler = pd.DataFrame('', index=df.index, columns=df.columns)
-    for i in df.index:
-        df_styler.loc[i, 'Nota (/10)'] = azul_claro
-        if "RIESGO" in str(df.loc[i, 'Etiquetas']): df_styler.loc[i, 'Etiquetas'] = rojo
-        elif "Foso" in str(df.loc[i, 'Etiquetas']) or "Ganga" in str(df.loc[i, 'Etiquetas']) or "Fortaleza" in str(df.loc[i, 'Etiquetas']): df_styler.loc[i, 'Etiquetas'] = verde
-        
-        if df.loc[i, 'Valor Intrínseco (DCF)'] > df.loc[i, col_precio_header]: df_styler.loc[i, 'Valor Intrínseco (DCF)'] = verde
-        elif df.loc[i, 'Valor Intrínseco (DCF)'] < df.loc[i, col_precio_header] and df.loc[i, 'Valor Intrínseco (DCF)'] > 0: df_styler.loc[i, 'Valor Intrínseco (DCF)'] = rojo
-
-        pfcf_val = limpiar_num(df.loc[i, col_pfcf_header])
-        if 0 < pfcf_val <= 22: df_styler.loc[i, col_pfcf_header] = verde
-        elif pfcf_val < 0 or pfcf_val > 30: df_styler.loc[i, col_pfcf_header] = rojo
-
-        if df.loc[i, 'Prueba Ácida (>1)'] >= 1: df_styler.loc[i, 'Prueba Ácida (>1)'] = verde
-        elif df.loc[i, 'Prueba Ácida (>1)'] < 0.8: df_styler.loc[i, 'Prueba Ácida (>1)'] = rojo
-        
-        deuda_val = limpiar_num(df.loc[i, 'Deuda/Patr. (<1)'])
-        if deuda_val < 1: df_styler.loc[i, 'Deuda/Patr. (<1)'] = verde
-        elif deuda_val > 2: df_styler.loc[i, 'Deuda/Patr. (<1)'] = rojo
-
-        if df.loc[i, 'Cob. Intereses (>4)'] > 4: df_styler.loc[i, 'Cob. Intereses (>4)'] = verde
-        elif df.loc[i, 'Cob. Intereses (>4)'] < 2: df_styler.loc[i, 'Cob. Intereses (>4)'] = rojo
-
-        roic_val = limpiar_num(df.loc[i, 'ROIC % (>12%)'])
-        if roic_val >= 12: df_styler.loc[i, 'ROIC % (>12%)'] = verde
-        elif roic_val < 5: df_styler.loc[i, 'ROIC % (>12%)'] = rojo
-
-        if df.loc[i, 'Margen Neto % (>10%)'] >= 10: df_styler.loc[i, 'Margen Neto % (>10%)'] = verde
-        elif df.loc[i, 'Margen Neto % (>10%)'] < 5: df_styler.loc[i, 'Margen Neto % (>10%)'] = rojo
-
-        margen_fcf_val = limpiar_num(df.loc[i, 'Margen FCF % (>10%)'])
-        if margen_fcf_val >= 10: df_styler.loc[i, 'Margen FCF % (>10%)'] = verde
-        elif margen_fcf_val < 5: df_styler.loc[i, 'Margen FCF % (>10%)'] = rojo
-
-        if df.loc[i, 'FCF/Beneficio (>0.8)'] >= 0.8: df_styler.loc[i, 'FCF/Beneficio (>0.8)'] = verde
-        elif df.loc[i, 'FCF/Beneficio (>0.8)'] < 0.5: df_styler.loc[i, 'FCF/Beneficio (>0.8)'] = rojo
-
-        if df.loc[i, 'CAGR Ventas 3y % (>5%)'] >= 5: df_styler.loc[i, 'CAGR Ventas 3y % (>5%)'] = verde
-        elif df.loc[i, 'CAGR Ventas 3y % (>5%)'] < 0: df_styler.loc[i, 'CAGR Ventas 3y % (>5%)'] = rojo
-
-        if df.loc[i, 'CAGR Benef. 3y % (>5%)'] >= 5: df_styler.loc[i, 'CAGR Benef. 3y % (>5%)'] = verde
-        elif df.loc[i, 'CAGR Benef. 3y % (>5%)'] < 0: df_styler.loc[i, 'CAGR Benef. 3y % (>5%)'] = rojo
-
-    return df_styler
-
-def generar_pdf_tearsheet(datos, col_precio):
-    pdf = FPDF()
-    pdf.add_page()
-    def format_text(texto):
-        t = str(texto).replace("★ TOP", " [LÍDER]").replace("▲", " [SUPERIOR]").replace("▬", " [MEDIA]").replace("▼", " [INFERIOR]")
-        return t.strip()
-
-    pdf.set_fill_color(15, 37, 55)
-    pdf.rect(0, 0, 210, 35, 'F')
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_font("Helvetica", style="B", size=20)
-    pdf.set_xy(15, 12)
-    pdf.cell(0, 10, f"TEAR SHEET: {datos['Ticker']}", ln=True)
-    pdf.set_font("Helvetica", style="I", size=11)
-    pdf.set_xy(15, 22)
-    pdf.cell(0, 10, f"Radiografia Fundamental V3 | {datos['Nombre']} | Sector: {datos['Sector']}")
-    
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_xy(15, 45)
-    pdf.set_font("Helvetica", style="B", size=14)
-    pdf.set_fill_color(230, 240, 250)
-    pdf.cell(180, 8, "  1. RESUMEN DE VALORACION Y PRECIO", fill=True, ln=True)
-    pdf.ln(2)
-    
-    pdf.set_font("Helvetica", style="B", size=10)
-    pdf.cell(60, 6, "Precio Actual:", ln=False)
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(120, 6, f"{datos[col_precio]}", ln=True)
-    
-    pdf.set_font("Helvetica", style="B", size=10)
-    pdf.cell(60, 6, "Valor Intrinseco (DCF):", ln=False)
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(120, 6, f"{datos['Valor Intrínseco (DCF)']} (WACC: {datos.get('WACC %', 'N/A')}%)", ln=True)
-
-    pdf.set_font("Helvetica", style="B", size=10)
-    pdf.cell(60, 6, "Nota Scoring Global:", ln=False)
-    pdf.set_font("Helvetica", size=10)
-    pdf.cell(120, 6, f"{datos['Nota (/10)']}/10  -  Perfil: {format_text(datos['Etiquetas'])}", ln=True)
-    pdf.ln(6)
-
-    pdf.set_font("Helvetica", style="B", size=14)
-    pdf.set_fill_color(230, 240, 250)
-    pdf.cell(180, 8, "  2. RADIOGRAFIA DE SALUD FINANCIERA (V3)", fill=True, ln=True)
-    pdf.ln(2)
-
-    pdf.set_font("Helvetica", style="B", size=10)
-    pdf.set_text_color(255, 255, 255)
-    pdf.set_fill_color(30, 60, 90)
-    pdf.cell(100, 8, " Metrica Analizada (Rango Optimo)", border=1, fill=True)
-    pdf.cell(80, 8, " Resultado y Posicion Sectorial", border=1, fill=True, ln=True)
-
-    pdf.set_text_color(0, 0, 0)
-    pdf.set_font("Helvetica", size=10)
-    
-    ratios_tabla = [
-        ("Prueba Acida / Liquidez (> 1)", datos['Prueba Ácida (>1)']),
-        ("Deuda sobre Patrimonio Neto (< 1)", datos['Deuda/Patr. (<1)']),
-        ("Cobertura de Intereses Deuda (> 4)", datos['Cob. Intereses (>4)']),
-        ("ROIC - Retorno Cap. Invertido % (> 12%)", datos['ROIC % (>12%)']),
-        ("Margen Neto de Beneficio % (> 10%)", datos['Margen Neto % (>10%)']),
-        ("Margen Free Cash Flow % (> 10%)", datos['Margen FCF % (>10%)']),
-        ("Veracidad Contable FCF/Neto (> 0.8)", datos['FCF/Beneficio (>0.8)']),
-        ("Crecimiento Anual Ventas 3y (> 5%)", datos['CAGR Ventas 3y % (>5%)']),
-        ("Crecimiento Anual Beneficio 3y (> 5%)", datos['CAGR Benef. 3y % (>5%)']),
-        ("Multiplo Valoracion - P/FCF (< 22)", datos[col_pfcf_header]),
-    ]
-    
-    alternar = False
-    for nombre, valor in ratios_tabla:
-        if alternar: pdf.set_fill_color(245, 248, 252)
-        else: pdf.set_fill_color(255, 255, 255)
-        pdf.cell(100, 7, f" {nombre}", border=1, fill=True)
-        pdf.set_font("Helvetica", style="B" if "LÍDER" in str(format_text(valor)) else "", size=10)
-        pdf.cell(80, 7, f" {format_text(valor)}", border=1, fill=True, ln=True)
-        pdf.set_font("Helvetica", size=10)
-        alternar = not alternar
-
-    pdf.set_y(-25)
-    pdf.set_font("Helvetica", style="I", size=8)
-    pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 4, f"Documento emitido por Radar Fundamental Pro el {datetime.now().strftime('%d/%m/%Y')}.", align="C", ln=True)
-    
-    try:
-        return bytes(pdf.output()) 
-    except TypeError:
-        return pdf.output(dest='S').encode('latin-1') 
-
-def plot_radar(datos_empresa):
-    def limpiar_num(val):
-        try: return float(str(val).split()[0])
-        except: return 0.0
-
-    acida = limpiar_num(datos_empresa['Prueba Ácida (>1)'])
-    deuda = limpiar_num(datos_empresa['Deuda/Patr. (<1)'])
-    roic = limpiar_num(datos_empresa['ROIC % (>12%)'])
-    margen_fcf = limpiar_num(datos_empresa['Margen FCF % (>10%)'])
-    pfcf = limpiar_num(datos_empresa[col_pfcf_header])
-
-    s_liquidez = min(10, acida * 10)
-    s_deuda = 10 if deuda < 0.2 else max(0, 10 - (deuda * 5))
-    s_calidad = min(10, (roic / 15.0) * 10)
-    s_caja = min(10, (margen_fcf / 15.0) * 10)
-    s_valoracion = 10 if 0 < pfcf <= 15 else max(0, 10 - (abs(15 - pfcf) / 3))
-
-    categorias = ['Liquidez (Ácida)', 'Solvencia (Deuda)', 'Calidad (ROIC)', 'Eficiencia (Caja)', 'Valoración (P/FCF)']
-    valores = [s_liquidez, s_deuda, s_calidad, s_caja, s_valoracion]
-    
-    fig = go.Figure()
-    fig.add_trace(go.Scatterpolar(
-        r=valores + [valores[0]], theta=categorias + [categorias[0]],
-        fill='toself', name=datos_empresa['Ticker'],
-        line_color='#E50914', fillcolor='rgba(229, 9, 20, 0.3)'
-    ))
-    fig.update_layout(
-        template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-        polar=dict(radialaxis=dict(visible=True, range=[0, 10])),
-        showlegend=False, margin=dict(l=40, r=40, t=20, b=20), height=350
-    )
-    return fig
-
-def plot_historico(ticker):
-    stock = yf.Ticker(ticker)
-    try:
-        fin = stock.financials
-        cf = stock.cashflow
-        if fin.empty: return None
-        
-        años = [str(x)[:4] for x in fin.columns[:4]][::-1]
-        ventas = (fin.loc['Total Revenue'][:4] / 1e9).tolist()[::-1] if 'Total Revenue' in fin.index else [0]*4
-        neto = (fin.loc['Net Income'][:4] / 1e9).tolist()[::-1] if 'Net Income' in fin.index else [0]*4
-        
-        if 'Free Cash Flow' in cf.index:
-            fcf = (cf.loc['Free Cash Flow'][:4] / 1e9).tolist()[::-1]
-        else:
-            op_cash = cf.loc['Total Cash From Operating Activities'][:4] if 'Total Cash From Operating Activities' in cf.index else pd.Series([0]*4)
-            capex = cf.loc['Capital Expenditure'][:4] if 'Capital Expenditure' in cf.index else pd.Series([0]*4)
-            fcf = ((op_cash + capex) / 1e9).tolist()[::-1]
-
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=años, y=ventas, name='Ingresos', marker_color='#333333'))
-        fig.add_trace(go.Bar(x=años, y=neto, name='Bº Neto', marker_color='#E50914'))
-        fig.add_trace(go.Scatter(x=años, y=fcf, name='Free Cash Flow', line=dict(color='#00CC96', width=3), mode='lines+markers'))
-        
-        fig.update_layout(
-            template='plotly_dark', paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
-            barmode='group', title="Evolución Histórica (Miles Millones)", height=350, margin=dict(l=20, r=20, t=40, b=20)
-        )
-        return fig
-    except: return None
-
-# ==========================================
-# FUNCIONES: TÉCNICO Y FMP SCREENER
-# ==========================================
-@st.cache_data(show_spinner=False)
-def obtener_datos_tecnicos(tickers_list):
-    resultados = []
-    for ticker in tickers_list:
-        try:
-            df = yf.download(ticker, period="2y", progress=False)
-            if df.empty: continue
-                
-            close_prices = df['Close'].squeeze()
-            high_prices = df['High'].squeeze()
-            low_prices = df['Low'].squeeze()
-            
-            precio_actual = float(close_prices.iloc[-1])
-            
-            rsi = float(ta.momentum.RSIIndicator(close_prices, window=14).rsi().iloc[-1])
-            sma200 = float(ta.trend.SMAIndicator(close_prices, window=200).sma_indicator().iloc[-1])
-            desviacion_sma200 = ((precio_actual - sma200) / sma200) * 100
-            
-            max_52s = float(high_prices.tail(252).max())
-            min_52s = float(low_prices.tail(252).min())
-            
-            caida_desde_max = ((precio_actual - max_52s) / max_52s) * 100
-            distancia_al_min = ((precio_actual - min_52s) / min_52s) * 100
-            
-            resultados.append({
-                "Ticker": ticker,
-                "Precio ($)": round(precio_actual, 2),
-                "RSI": round(rsi, 2),
-                "Caída Max 52S (%)": round(caida_desde_max, 2),
-                "Dist. Mínimo 52S (%)": round(distancia_al_min, 2),
-                "Desviación SMA 200 (%)": round(desviacion_sma200, 2)
-            })
-        except Exception:
-            pass
-    return pd.DataFrame(resultados)
-
-# --- NUEVO SISTEMA ANTI-ERRORES PARA FMP ---
-def obtener_tickers_fmp(api_key, mercado, sector, mcap, limite):
-    base_url = "https://financialmodelingprep.com/api/v3/stock-screener"
-    
-    api_key_clean = api_key.strip()
-    
-    params = {
-        "apikey": api_key_clean,
-        "limit": limite,
-        "isActivelyTrading": "true"
-    }
-    
-    if mercado == "Wall Street (NYSE, NASDAQ)": params["exchange"] = "NYSE,NASDAQ"
-    elif mercado == "Europa (EURONEXT, XETRA, LSE)": params["exchange"] = "EURONEXT,XETRA,LSE"
-        
-    if sector != "Todos": params["sector"] = sector
-        
-    if mcap == "> 2 Billones ($)": params["marketCapMoreThan"] = 2000000000
-    elif mcap == "> 10 Billones ($)": params["marketCapMoreThan"] = 10000000000
-        
-    try:
-        res = requests.get(base_url, params=params)
-        data = res.json()
-        
-        if isinstance(data, dict) and "Error Message" in data:
-            st.error(f"🛑 FMP dice: {data['Error Message']}")
-            return []
-            
-        return [item['symbol'] for item in data] if isinstance(data, list) else []
-    except Exception as e:
-        st.error(f"🛑 Error de conexión con FMP: {e}")
-        return []
-
-def obtener_tickers_indice(indice):
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        def extraer_columna_ticker(tabla):
-            for col in tabla.columns:
-                col_name = str(col).lower()
-                if 'ticker' in col_name or 'symbol' in col_name:
-                    lista_sucia = tabla[col].dropna().astype(str).tolist()
-                    return [t.split('[')[0].strip() for t in lista_sucia]
-            return None
-
-        if indice == "S&P 500":
-            html = requests.get('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            res = extraer_columna_ticker(tablas[0])
-            if res: return res
-        elif indice == "NASDAQ 100":
-            urls = ['https://en.wikipedia.org/wiki/Nasdaq-100', 'https://en.wikipedia.org/wiki/List_of_NASDAQ-100_companies']
-            for url in urls:
-                try:
-                    html = requests.get(url, headers=headers).text
-                    tablas = pd.read_html(io.StringIO(html))
-                    for t in tablas:
-                        res = extraer_columna_ticker(t)
-                        if res and len(res) > 50: return res
-                except: continue
-        elif indice == "DOW JONES 30":
-            urls = ['https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average', 'https://en.wikipedia.org/wiki/List_of_Dow_Jones_Industrial_Average_companies']
-            for url in urls:
-                try:
-                    html = requests.get(url, headers=headers).text
-                    tablas = pd.read_html(io.StringIO(html))
-                    for t in tablas:
-                        res = extraer_columna_ticker(t)
-                        if res and len(res) > 20: return res
-                except: continue
-        elif indice == "IBEX 35 (España)":
-            html = requests.get('https://en.wikipedia.org/wiki/IBEX_35', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            for t in tablas:
-                res = extraer_columna_ticker(t)
-                if res and len(res) > 20: return [f"{str(x).replace('.MC', '')}.MC" for x in res]
-        elif indice == "DAX 40 (Alemania)":
-            html = requests.get('https://en.wikipedia.org/wiki/DAX', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            for t in tablas:
-                res = extraer_columna_ticker(t)
-                if res and len(res) > 20: return [f"{str(x).replace('.', '-')}.DE" for x in res]
-        elif indice == "CAC 40 (Francia)":
-            html = requests.get('https://en.wikipedia.org/wiki/CAC_40', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            for t in tablas:
-                res = extraer_columna_ticker(t)
-                if res and len(res) > 20: return [f"{str(x).replace('.', '-')}.PA" for x in res]
-        elif indice == "FTSE 100 (Reino Unido)":
-            html = requests.get('https://en.wikipedia.org/wiki/FTSE_100_Index', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            for t in tablas:
-                res = extraer_columna_ticker(t)
-                if res and len(res) > 50: return [f"{str(x).replace('.', '-')}.L" for x in res]
-        elif "SECTOR:" in indice:
-            html = requests.get('https://en.wikipedia.org/wiki/List_of_S%26P_500_companies', headers=headers).text
-            tablas = pd.read_html(io.StringIO(html))
-            df_sp = tablas[0]
-            sectores_gics = {
-                "SECTOR: Tecnología": "Information Technology", "SECTOR: Salud": "Health Care",
-                "SECTOR: Finanzas": "Financials", "SECTOR: Consumo Cíclico": "Consumer Discretionary",
-                "SECTOR: Consumo Defensivo": "Consumer Staples", "SECTOR: Energía": "Energy"
-            }
-            for col in df_sp.columns:
-                col_name = str(col).lower()
-                if 'ticker' in col_name or 'symbol' in col_name:
-                    return df_sp[df_sp['GICS Sector'] == sectores_gics.get(indice)][col].tolist()
-    except: return []
-    return []
-
-def escanear_lista_tickers(lista, solo_top_7, fmp_api_key=None):
-    st.session_state.tech_df = pd.DataFrame() 
-    resultados_nuevos = []
-    progreso_texto = st.empty()
-    barra_progreso = st.progress(0)
-    total = len(lista)
-    
-    for idx, ticker in enumerate(lista):
-        sufijos_europeos = [".MC", ".DE", ".PA", ".L"]
-        ticker_yf = str(ticker).replace('.', '-') if "." in str(ticker) and not any(str(ticker).endswith(s) for s in sufijos_europeos) else ticker
-        
-        if ticker_yf in st.session_state.portfolio_df.get('Ticker', pd.Series()).values: continue
-            
-        progreso_texto.write(f"⏳ Analizando {idx+1}/{total}: **{ticker_yf}**...")
-        barra_progreso.progress((idx + 1) / total)
-        
-        datos = obtener_datos_empresa(ticker_yf, fmp_api_key)
-        if datos:
-            if solo_top_7 and datos['Nota (/10)'] < 7: continue
-            resultados_nuevos.append(datos)
-            
-    progreso_texto.empty()
-    barra_progreso.empty()
-    
-    if resultados_nuevos:
-        nuevo_df = pd.DataFrame(resultados_nuevos)
-        st.session_state.portfolio_df = pd.concat([st.session_state.portfolio_df, nuevo_df], ignore_index=True)
-        try: st.session_state.portfolio_df.to_excel(ARCHIVO_AUTOGUARDADO, index=False)
-        except: pass
-        st.success(f"💥 ¡Escaneo completado! Añadidas {len(resultados_nuevos)} empresas.")
+# ---------------------------------------------------------
+# FUNCIONES DE DATOS Y MODELADO MATEMÁTICO
+# ---------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_market_data(tickers_list, years):
+    end_date = datetime.today()
+    start_date = end_date - timedelta(days=365 * years)
+    data = yf.download(tickers_list, start=start_date, end=end_date, auto_adjust=True, progress=False)
+    if isinstance(data.columns, pd.MultiIndex):
+        closes = data["Close"]
     else:
-        st.warning("El escaneo terminó. Ninguna empresa superó el filtro.")
+        closes = data[["Close"]]
+        closes.columns = tickers_list
+    # Alinear series temporales (rellenar festivos cruzados y limpiar nulos iniciales)
+    closes = closes.ffill().dropna()
+    return closes
 
-# ==========================================
-# INTERFAZ DE USUARIO (UI) - PANEL LATERAL
-# ==========================================
-with st.sidebar:
-    st.markdown("<h2 style='text-align: center; color: #E50914;'>RADAR PRO V3</h2>", unsafe_allow_html=True)
-    
-    st.header("🔑 Conexión FMP")
-    api_key = st.text_input("API Key (FMP):", type="password", help="Tu clave gratuita de financialmodelingprep.com")
-    
-    st.divider()
-    
-    with st.expander("📡 Screener Institucional (FMP)", expanded=True):
-        if api_key:
-            fmp_mercado = st.selectbox("Mercado:", ["Wall Street (NYSE, NASDAQ)", "Europa (EURONEXT, XETRA, LSE)", "Cualquiera"])
-            fmp_sector = st.selectbox("Sector:", ["Todos", "Technology", "Healthcare", "Financial Services", "Consumer Cyclical", "Energy", "Industrials"])
-            fmp_mcap = st.selectbox("Tamaño Empresa:", ["> 2 Billones ($)", "> 10 Billones ($)", "Cualquiera"])
-            fmp_limite = st.slider("Máximo de resultados a extraer:", 10, 100, 40)
-            fmp_filtro_activo = st.checkbox("Filtrar solo Nota >= 7", value=True, key="fmp_filtro")
+def fit_linear_or_constrained(X_train, y_train, enforce_opposite_signs=False):
+    n_features = X_train.shape[1]
+    model = LinearRegression()
+    model.fit(X_train, y_train)
+    weights = model.coef_.copy()
+    intercept = float(model.intercept_)
 
-            if st.button("🚀 Escanear con FMP", type="primary", use_container_width=True):
-                tickers_fmp = obtener_tickers_fmp(api_key, fmp_mercado, fmp_sector, fmp_mcap, fmp_limite)
-                if tickers_fmp: 
-                    escanear_lista_tickers(tickers_fmp, fmp_filtro_activo, api_key)
-        else:
-            st.warning("Introduce tu API Key arriba para desbloquear el screener avanzado.")
+    # Si el usuario pide forzar Fuerza Relativa (+/-) y todos los pesos tienen el mismo signo:
+    if enforce_opposite_signs and n_features >= 2:
+        if np.all(weights >= 0) or np.all(weights <= 0):
+            # Elegir el predictor con mayor correlación positiva y el menor para forzar signos opuestos
+            corrs = [np.corrcoef(X_train[:, i], y_train)[0, 1] for i in range(n_features)]
+            pos_idx = int(np.argmax(corrs))
+            neg_idx = int(np.argmin(corrs))
+            if pos_idx == neg_idx:
+                neg_idx = (pos_idx + 1) % n_features
 
-    with st.expander("⚙️ Índices Clásicos (Wikipedia)"):
-        filtro_activo = st.checkbox("Filtrar solo Nota >= 7", value=True, key="wiki_filtro")
-        opciones_radar = ["S&P 500", "NASDAQ 100", "DOW JONES 30", "IBEX 35 (España)", "DAX 40 (Alemania)", "CAC 40 (Francia)"]
-        indice_seleccionado = st.selectbox("Índice:", opciones_radar)
-        if st.button(f"🔍 Escanear Índice", use_container_width=True):
-            tickers = obtener_tickers_indice(indice_seleccionado)
-            if tickers: escanear_lista_tickers(tickers, filtro_activo, api_key)
-            
-    with st.expander("🔎 Búsqueda Manual"):
-        ticker_input = st.text_input("Tickers (ej. AAPL, SAN.MC):").upper().strip()
-        if st.button("Añadir Empresa", use_container_width=True):
-            if ticker_input:
-                lista_tickers = [t.strip() for t in ticker_input.replace(',', ' ').split() if t.strip()]
-                escanear_lista_tickers(lista_tickers, solo_top_7=False, fmp_api_key=api_key)
-            else:
-                st.error("Introduce al menos un ticker.")
-                
-    with st.expander("🎯 Filtro Final TradingView"):
-        tv_input = st.text_area("Pega tu lista final:", help="Ejemplo: NYSE:DECK, NASDAQ:NFLX, BME:SAN")
-        if st.button("Filtrar Radar", use_container_width=True):
-            if tv_input and not st.session_state.portfolio_df.empty:
-                clean_tv_tickers = [t.split(':')[-1].strip().upper() for t in tv_input.split(',') if t.strip()]
-                
-                def match_ticker(yf_ticker, tv_list):
-                    yf_exact = str(yf_ticker).upper()
-                    yf_base_dot = yf_exact.split('.')[0]
-                    yf_base_dash = yf_exact.split('-')[0]
-                    
-                    for tv_t in tv_list:
-                        tv_exact = tv_t.upper()
-                        if yf_exact == tv_exact or yf_base_dot == tv_exact or yf_base_dash == tv_exact:
-                            return True
-                    return False
-
-                filtro = st.session_state.portfolio_df['Ticker'].apply(lambda x: match_ticker(x, clean_tv_tickers))
-                st.session_state.portfolio_df = st.session_state.portfolio_df[filtro].reset_index(drop=True)
-                
-                st.session_state.tech_df = pd.DataFrame() 
-                try: st.session_state.portfolio_df.to_excel(ARCHIVO_AUTOGUARDADO, index=False)
-                except: pass
-                st.rerun()
-            elif st.session_state.portfolio_df.empty:
-                st.warning("El radar fundamental está vacío.")
-                
-    with st.expander("🛠️ Gestión de Datos"):
-        archivo_subido = st.file_uploader("📤 Cargar Portafolio (Excel)", type=['xlsx'], key=st.session_state.uploader_key)
-        if archivo_subido is not None:
-            try:
-                df_cargado = pd.read_excel(archivo_subido)
-                if 'Ticker' in df_cargado.columns:
-                    df_cargado.rename(columns=lambda x: col_precio_header if str(x).startswith('Precio [') else x, inplace=True)
-                    st.session_state.portfolio_df = df_cargado
-                    st.success("✅ ¡Cargado con éxito!")
+            bounds = [(None, None)]  # Intercepto libre
+            for i in range(n_features):
+                if i == pos_idx:
+                    bounds.append((1e-6, None))
+                elif i == neg_idx:
+                    bounds.append((None, -1e-6))
                 else:
-                    st.error("❌ Formato incorrecto.")
-            except Exception as e:
-                st.error(f"Error: {e}")
+                    bounds.append((None, None))
 
-        if st.button("🗑️ Vaciar Radar", type="primary", use_container_width=True):
-            st.session_state.portfolio_df = pd.DataFrame()
-            st.session_state.tech_df = pd.DataFrame()
-            try:
-                if os.path.exists(ARCHIVO_AUTOGUARDADO): os.remove(ARCHIVO_AUTOGUARDADO)
-            except Exception: pass
-            st.session_state.uploader_key = str(datetime.now())
-            st.rerun()
+            def loss_func(params):
+                b = params[0]
+                w = params[1:]
+                pred = b + X_train.dot(w)
+                return np.mean((y_train - pred) ** 2)
 
-# ==========================================
-# INTERFAZ DE USUARIO (UI) - PANTALLA PRINCIPAL
-# ==========================================
-if not st.session_state.portfolio_df.empty:
-    df_mostrar = st.session_state.portfolio_df.sort_values(by='Nota (/10)', ascending=False).reset_index(drop=True)
-    df_mostrar = aplicar_simbolos_sectoriales(df_mostrar)
+            init_params = np.zeros(n_features + 1)
+            res = minimize(loss_func, init_params, method="L-BFGS-B", bounds=bounds)
+            if res.success:
+                intercept = float(res.x[0])
+                weights = res.x[1:]
+
+    return weights, intercept
+
+def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_ratio, enforce_rs=False):
+    df = pd.DataFrame(index=df_returns.index)
+    # Retorno futuro a predecir (t + horizon)
+    df["Target_Future"] = df_returns[target_col].shift(-horizon_days)
     
-    mejor_empresa = df_mostrar.iloc[0]['Ticker']
-    mejor_nota = df_mostrar.iloc[0]['Nota (/10)']
-    
-    st.markdown(f"""
-    <div class="metric-card-principal">
-        <div class="metric-title">🏆 TOP PICK / Mejor Puntuada</div>
-        <div class="metric-value-xl">{mejor_empresa}</div>
-        <div class="metric-subtitle">Puntuación de Salud Fundamental: {mejor_nota}/10</div>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    col_t1, col_t2 = st.columns(2)
-    with col_t1:
-        st.markdown(f"""
-        <div class="metric-card-secundaria">
-            <div class="metric-title">📅 Fecha del Análisis</div>
-            <div class="metric-value-md">{fecha_hoy}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    with col_t2:
-        st.markdown(f"""
-        <div class="metric-card-secundaria">
-            <div class="metric-title">🏢 Empresas Analizadas (Filtro Fundamental)</div>
-            <div class="metric-value-md">{len(df_mostrar)}</div>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    tab1, tab2, tab3 = st.tabs(["📊 Tabla de Resultados", "🔬 Análisis Profundo (Tear Sheet)", "📈 Screener Técnico (Timing)"])
-    
-    with tab1:
-        df_estilizado = df_mostrar.style.apply(aplicar_estilos, axis=None)
+    for col in feature_cols:
+        df[col] = df_returns[col]
+
+    # Fila más reciente (hoy) para lanzar la predicción en vivo hacia los próximos N días
+    latest_features = df_returns[feature_cols].iloc[-1:]
+
+    # Limpiar últimas filas sin retorno futuro conocido para entrenar/validar
+    df_model = df.dropna().copy()
+    split_idx = int(len(df_model) * (train_ratio / 100.0))
+
+    train_df = df_model.iloc[:split_idx]
+    test_df = df_model.iloc[split_idx:]
+
+    X_train = train_df[feature_cols].values
+    y_train = train_df["Target_Future"].values
+    X_test = test_df[feature_cols].values
+    y_test = test_df["Target_Future"].values
+    X_all = df_model[feature_cols].values
+
+    weights, intercept = fit_linear_or_constrained(X_train, y_train, enforce_rs)
+
+    df_model["Pred"] = intercept + X_all.dot(weights)
+    # Señal operativa: +1 (Long) si predice retorno positivo, -1 (Short) si predice negativo
+    df_model["Signal"] = np.sign(df_model["Pred"])
+    df_model["Strategy_Return"] = df_model["Signal"] * df_model["Target_Future"]
+
+    # Escalar el retorno por 1 / horizon_days al acumular a diario (cartera solapada equivalente)
+    df_model["Equity_Curve"] = (df_model["Strategy_Return"] / horizon_days).cumsum() * 100.0
+    df_model["BuyHold_Curve"] = (df_model["Target_Future"] / horizon_days).cumsum() * 100.0
+
+    train_strat = df_model["Strategy_Return"].iloc[:split_idx]
+    test_strat = df_model["Strategy_Return"].iloc[split_idx:]
+
+    def get_metrics(series):
+        if len(series) == 0:
+            return {"mean_pct": 0.0, "win_rate": 0.0, "sharpe": 0.0, "total_pnl": 0.0}
+        mean_ret = series.mean() * 100.0
+        win_rate = (series > 0).mean() * 100.0
+        std_ret = series.std()
+        sharpe = (series.mean() / std_ret) * np.sqrt(252.0 / horizon_days) if std_ret > 1e-9 else 0.0
+        total_pnl = (series.sum() / horizon_days) * 100.0
+        return {
+            "mean_pct": mean_ret,
+            "win_rate": win_rate,
+            "sharpe": sharpe,
+            "total_pnl": total_pnl
+        }
+
+    live_pred = float(intercept + latest_features.values.dot(weights)[0])
+
+    return {
+        "weights": weights,
+        "intercept": intercept,
+        "features": feature_cols,
+        "train_metrics": get_metrics(train_strat),
+        "test_metrics": get_metrics(test_strat),
+        "df_model": df_model,
+        "split_date": df_model.index[split_idx],
+        "live_pred_pct": live_pred * 100.0,
+        "latest_features": latest_features.iloc[0] * 100.0
+    }
+
+# ---------------------------------------------------------
+# EJECUCIÓN Y CARGA DE DATOS
+# ---------------------------------------------------------
+all_requested_tickers = list(dict.fromkeys([target_ticker] + candidate_tickers))
+
+with st.spinner(f"Descargando cotizaciones en tiempo real para {len(all_requested_tickers)} activos..."):
+    closes_df = load_market_data(all_requested_tickers, years_back)
+
+if target_ticker not in closes_df.columns:
+    st.error(f"❌ No se encontraron datos para el activo objetivo `{target_ticker}`. Revisa el símbolo en Yahoo Finance.")
+    st.stop()
+
+valid_candidates = [c for c in candidate_tickers if c in closes_df.columns]
+missing_tickers = set(candidate_tickers) - set(valid_candidates)
+if missing_tickers:
+    st.warning(f"⚠️ No se pudieron descargar datos para: {', '.join(missing_tickers)}. Se omitirán del análisis.")
+
+selected_predictors = [p for p in selected_predictors if p in valid_candidates]
+
+if len(closes_df) < horizon * 10:
+    st.error("❌ No hay suficientes barras históricas para el horizonte seleccionado. Reduce el horizonte o amplía los años.")
+    st.stop()
+
+# Cálculo de retornos en la ventana N días (exactamente como en el vídeo)
+returns_df = closes_df.pct_change(horizon).dropna()
+
+# Pestañas principales de la aplicación
+tab_manual, tab_scanner = st.tabs([
+    "📊 1. Cuadro de Mando y Backtest (Análisis de Activos)",
+    "🔍 2. Escáner Automático (Buscador de las Mejores Parejas)"
+])
+
+# =========================================================
+# PESTAÑA 1: ANÁLISIS MANUAL (MÓDULOS B, C y D)
+# =========================================================
+with tab_manual:
+    if not selected_predictors:
+        st.info("👈 Selecciona al menos un activo predictor en la barra lateral para iniciar el modelo.")
+    else:
+        # 1. Evaluar Modelo Autorregresivo Base (AR)
+        ar_res = evaluate_strategy(returns_df, target_ticker, [target_ticker], horizon, train_Pct, False)
         
-        st.dataframe(
-            df_estilizado, 
-            use_container_width=True, height=450, 
-            column_config={
-                "Ticker": st.column_config.TextColumn(pinned=True),
-                "Nombre": st.column_config.TextColumn(pinned=True),
-                "Valor Intrínseco (DCF)": st.column_config.NumberColumn(help="Calculado vía FMP API si la llave está activa."),
-                "Beta": st.column_config.NumberColumn(help="Volatilidad respecto al mercado. >1 es más volátil."),
-                "WACC %": st.column_config.NumberColumn(help="Tasa de descuento dinámica calculada por CAPM."),
-                "Prueba Ácida (>1)": st.column_config.Column(help="Liquidez sin inventarios."),
-                "Deuda/Patr. (<1)": st.column_config.Column(help="Apalancamiento financiero real."),
-                "Cob. Intereses (>4)": st.column_config.Column(help="Capacidad de pago de deuda."),
-                "ROIC % (>12%)": st.column_config.Column(help="Retorno sobre Capital Invertido."),
-                "Margen Neto % (>10%)": st.column_config.Column(help="Poder de fijación de precios."),
-                "Margen FCF % (>10%)": st.column_config.Column(help="Conversión de ventas en caja libre."),
-                "FCF/Beneficio (>0.8)": st.column_config.Column(help="Veracidad contable del beneficio."),
-                "CAGR Ventas 3y % (>5%)": st.column_config.Column(help="Crec. compuesto de ventas."),
-                "CAGR Benef. 3y % (>5%)": st.column_config.Column(help="Crec. compuesto de beneficios."),
-                col_pfcf_header: st.column_config.Column(help="Valoración por múltiplos de FCF."),
-                "Nota (/10)": st.column_config.Column(help="Score V3 Integral."),
-                "Etiquetas": st.column_config.Column(help="Clasificación automática del algoritmo.")
+        # 2. Evaluar Modelo de Retornos Cruzados elegido por el usuario
+        user_features = ([target_ticker] + selected_predictors) if include_ar else selected_predictors
+        cross_res = evaluate_strategy(returns_df, target_ticker, user_features, horizon, train_Pct, force_rs)
+
+        # ---------------------------------------------------------
+        # MÓDULO B: SEMÁFORO OPERATIVO Y SEÑAL ACTUAL
+        # ---------------------------------------------------------
+        st.subheader(f"🚦 Señal Actual en Vivo para `{target_ticker}` (Próximos {horizon} días)")
+        
+        pred_val = cross_res["live_pred_pct"]
+        if pred_val > 0.05:
+            signal_label = "🟢 LONG / ALCISTA"
+        elif pred_val < -0.05:
+            signal_label = "🔴 SHORT / BAJISTA"
+        else:
+            signal_label = "⚪ NEUTRAL / SIN VENTAJA CLARA"
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Dirección Propuesta", signal_label)
+        col2.metric(f"Retorno Esperado ({horizon}d)", f"{pred_val:+.2f}%")
+        col3.metric("Win Rate (Out-of-Sample)", f"{cross_res['test_metrics']['win_rate']:.1f}%")
+        col4.metric(
+            "Retorno Medio / Trade (Test)",
+            f"{cross_res['test_metrics']['mean_pct']:+.2f}%",
+            delta=f"{cross_res['test_metrics']['mean_pct'] - ar_res['test_metrics']['mean_pct']:+.2f}% vs AR"
+        )
+
+        # Explicación en lenguaje natural de lo que está ocurriendo hoy
+        contributions = []
+        for feat, w in zip(cross_res["features"], cross_res["weights"]):
+            curr_ret = cross_res["latest_features"][feat]
+            impact = w * curr_ret
+            regime = "Tendencial (+)" if w >= 0 else "Reversión (-)"
+            contributions.append((feat, curr_ret, w, impact, regime))
+        
+        contributions.sort(key=lambda x: abs(x[3]), reverse=True)
+        top_driver = contributions[0]
+        
+        st.info(
+            f"💡 **Lectura Cuantitativa Actual:** El mayor impulsor de la señal hoy es **`{top_driver[0]}`**, "
+            f"que acumula un retorno de **{top_driver[1]:+.2f}%** en los últimos {horizon} días. "
+            f"Como su coeficiente es de **{top_driver[4]}** ({top_driver[2]:+.3f}), aporta **{top_driver[3]:+.2f}%** "
+            f"a la proyección de `{target_ticker}`."
+        )
+
+        st.divider()
+
+        # ---------------------------------------------------------
+        # MÓDULO C: RADIOGRAFÍA DEL MODELO (PESOS Y FUERZA RELATIVA)
+        # ---------------------------------------------------------
+        st.subheader("🧬 Radiografía del Modelo (Pesos y Fuerza Relativa)")
+        
+        col_weights, col_chart = st.columns([1.2, 1])
+
+        weights_df = pd.DataFrame({
+            "Activo Predictor": cross_res["features"],
+            "Coeficiente (Peso w)": [round(w, 4) for w in cross_res["weights"]],
+            "Comportamiento": ["📈 Tendencia (Momentum)" if w > 0 else "🔄 Reversión a la Media" for w in cross_res["weights"]],
+            f"Retorno Actual ({horizon}d %)": [round(cross_res["latest_features"][f], 2) for f in cross_res["features"]],
+            "Aportación a Hoy (%)": [round(w * cross_res["latest_features"][f], 3) for w, f in zip(cross_res["weights"], cross_res["features"])]
+        })
+
+        with col_weights:
+            st.markdown("**Tabla de Coeficientes Aprendidos (Entrenamiento):**")
+            st.dataframe(weights_df, use_container_width=True, hide_index=True)
+            st.caption(f"**Intercepto / Sesgo base (Bias $b$):** `{cross_res['intercept']*100:+.3f}%`")
+
+            has_pos = any(w > 0 for w in cross_res["weights"])
+            has_neg = any(w < 0 for w in cross_res["weights"])
+            if has_pos and has_neg:
+                pos_assets = [f for f, w in zip(cross_res["features"], cross_res["weights"]) if w > 0]
+                neg_assets = [f for f, w in zip(cross_res["features"], cross_res["weights"]) if w < 0]
+                st.success(
+                    f"⚖️ **Patrón de Fuerza Relativa Detectado:** El modelo ha encontrado un equilibrio de signos opuestos. "
+                    f"Cuando **{', '.join(pos_assets)}** rinden mejor que **{', '.join(neg_assets)}**, la expectativa para `{target_ticker}` se vuelve alcista."
+                )
+
+        with col_chart:
+            fig_w = go.Figure(go.Bar(
+                x=cross_res["features"],
+                y=cross_res["weights"],
+                marker_color=["#10b981" if w > 0 else "#ef4444" for w in cross_res["weights"]],
+                text=[f"{w:+.3f}" for w in cross_res["weights"]],
+                textposition="auto"
+            ))
+            fig_w.update_layout(
+                title="Pesos del Modelo por Activo (Verde = Momentum | Rojo = Reversión)",
+                yaxis_title="Peso (w)",
+                height=300,
+                margin=dict(l=20, r=20, t=40, b=20)
+            )
+            st.plotly_chart(fig_w, use_container_width=True)
+
+        st.divider()
+
+        # ---------------------------------------------------------
+        # MÓDULO D: VALIDACIÓN ESTADÍSTICA Y CURVA DE EQUIDAD
+        # ---------------------------------------------------------
+        st.subheader("📈 Validación Estadística: In-Sample (Entrenamiento) vs. Out-of-Sample (Prueba)")
+
+        comp_table = pd.DataFrame([
+            {
+                "Modelo": f"1. Autorregresivo Base (Solo {target_ticker})",
+                "Retorno Medio Trade (Train)": f"{ar_res['train_metrics']['mean_pct']:+.2f}%",
+                "Retorno Medio Trade (Test Out-of-Sample)": f"{ar_res['test_metrics']['mean_pct']:+.2f}%",
+                "Win Rate (Test)": f"{ar_res['test_metrics']['win_rate']:.1f}%",
+                "Sharpe Anualizado (Test)": f"{ar_res['test_metrics']['sharpe']:.2f}",
+                "PnL Acumulado (Test)": f"{ar_res['test_metrics']['total_pnl']:+.1f}%"
+            },
+            {
+                "Modelo": f"2. Retornos Cruzados ({', '.join(cross_res['features'])})",
+                "Retorno Medio Trade (Train)": f"{cross_res['train_metrics']['mean_pct']:+.2f}%",
+                "Retorno Medio Trade (Test Out-of-Sample)": f"{cross_res['test_metrics']['mean_pct']:+.2f}%",
+                "Win Rate (Test)": f"{cross_res['test_metrics']['win_rate']:.1f}%",
+                "Sharpe Anualizado (Test)": f"{cross_res['test_metrics']['sharpe']:.2f}",
+                "PnL Acumulado (Test)": f"{cross_res['test_metrics']['total_pnl']:+.1f}%"
             }
+        ])
+        st.dataframe(comp_table, use_container_width=True, hide_index=True)
+
+        # Gráfico de Curva de Equidad con separación Train / Test
+        df_plot = cross_res["df_model"]
+        ar_plot = ar_res["df_model"]
+        split_dt = cross_res["split_date"]
+
+        fig_eq = go.Figure()
+        fig_eq.add_trace(go.Scatter(
+            x=df_plot.index, y=df_plot["Equity_Curve"],
+            mode="lines", name="Estrategia Retornos Cruzados",
+            line=dict(color="#2563eb", width=2.5)
+        ))
+        fig_eq.add_trace(go.Scatter(
+            x=ar_plot.index, y=ar_plot["Equity_Curve"],
+            mode="lines", name=f"Modelo Autorregresivo ({target_ticker})",
+            line=dict(color="#9ca3af", width=1.5, dash="dot")
+        ))
+        fig_eq.add_trace(go.Scatter(
+            x=df_plot.index, y=df_plot["BuyHold_Curve"],
+            mode="lines", name=f"Buy & Hold ({target_ticker})",
+            line=dict(color="#f59e0b", width=1.5, dash="dash")
+        ))
+
+        # Línea vertical de corte entre Entrenamiento y Prueba
+        fig_eq.add_vline(x=split_dt, line_width=2, line_dash="dash", line_color="#ef4444")
+        fig_eq.add_annotation(
+            x=split_dt, y=max(df_plot["Equity_Curve"].max(), df_plot["BuyHold_Curve"].max()),
+            text="⬅️ Entrenamiento (In-Sample) | Prueba Real (Out-of-Sample) ➡️",
+            showarrow=False, yshift=15, font=dict(color="#ef4444", size=12)
         )
-        
-        st.markdown("<br>", unsafe_allow_html=True)
-        buffer_excel = io.BytesIO()
-        with pd.ExcelWriter(buffer_excel, engine='openpyxl') as writer:
-            df_estilizado.to_excel(writer, index=False)
-        
-        st.download_button(
-            label="📥 Descargar Tabla en Excel", 
-            data=buffer_excel.getvalue(), 
-            file_name=f"Radar_V3_{fecha_hoy}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+        fig_eq.update_layout(
+            title=f"Curva de Equidad Acumulada (%) — Horizonte {horizon} días",
+            xaxis_title="Fecha",
+            yaxis_title="Retorno Bruto Acumulado (%)",
+            height=450,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
         )
-        
-    with tab2:
-        opciones_detalles = [f"{row['Ticker']} - {row['Nombre']}" for idx, row in df_mostrar.iterrows()]
-        seleccion = st.selectbox("Selecciona empresa:", opciones_detalles)
-        ticker_seleccionado = seleccion.split(" - ")[0]
-        datos_seleccionados = df_mostrar[df_mostrar['Ticker'] == ticker_seleccionado].iloc[0]
-        
-        col_graf_1, col_graf_2 = st.columns([1, 1.5])
-        
-        with col_graf_1:
-            st.subheader("⚖️ Equilibrio Fundamental V3")
-            st.plotly_chart(plot_radar(datos_seleccionados), use_container_width=True)
-            
-            dcf_val = datos_seleccionados['Valor Intrínseco (DCF)']
-            precio_act = datos_seleccionados[col_precio_header]
-            wacc = datos_seleccionados.get('WACC %', 9.0)
-            
-            if dcf_val > 0:
-                margen_seguridad = ((dcf_val - precio_act) / dcf_val) * 100
-                color_delta = "normal" if margen_seguridad > 0 else "inverse"
-                st.metric(label=f"Valor Justo FMP (WACC {wacc}%)", value=f"{dcf_val:.2f}", delta=f"{margen_seguridad:.1f}% Margen", delta_color=color_delta)
-            else: st.metric(label="Valor Justo", value="N/A")
-            
-            if fpdf_disponible:
-                pdf_data = generar_pdf_tearsheet(datos_seleccionados, col_precio_header)
-                st.download_button(label="📄 Informe PDF (V3)", data=pdf_data, file_name=f"{ticker_seleccionado}_V3.pdf", mime="application/pdf")
-            
-        with col_graf_2:
-            st.subheader("📊 Tendencia (5 Años)")
-            fig_historico = plot_historico(ticker_seleccionado)
-            if fig_historico: st.plotly_chart(fig_historico, use_container_width=True)
+        st.plotly_chart(fig_eq, use_container_width=True)
 
-    with tab3:
-        st.subheader("⏱️ Timing de Compra (Análisis Técnico)")
-        st.markdown("Busca el mejor momento de entrada para las empresas que **ya han superado tu filtro fundamental**.")
-        
-        tickers_fundamentales = df_mostrar['Ticker'].tolist()
-        
-        if st.button("🚀 Calcular Indicadores Técnicos para las empresas actuales", type="primary"):
-            with st.spinner("Descargando históricos (2 años) y calculando RSI y Medias Móviles..."):
-                st.session_state.tech_df = obtener_datos_tecnicos(tickers_fundamentales)
-        
-        if not st.session_state.tech_df.empty:
-            df_tech = st.session_state.tech_df.copy()
-            
-            empresas_menos20 = len(df_tech[df_tech['Caída Max 52S (%)'] <= -20])
-            empresas_menos30 = len(df_tech[df_tech['Caída Max 52S (%)'] <= -30])
-            
-            col_kpi1, col_kpi2 = st.columns(2)
-            with col_kpi1: st.info(f"📉 **{empresas_menos20}** Valores a más de -20% de máximos")
-            with col_kpi2: st.error(f"🚨 **{empresas_menos30}** Valores a más de -30% de máximos")
-            
-            st.divider()
-            
-            st.subheader("🛠️ Ajusta tus Criterios de Entrada")
-            f_col1, f_col2, f_col3 = st.columns(3)
-            
-            with f_col1:
-                filtro_caida = st.selectbox("Caída desde Máximos (52S):", ["Mostrar Todos", "Solo caídas > 20%", "Solo caídas > 30%"])
-            with f_col2:
-                max_rsi = st.slider("RSI Máximo (Buscar sobreventa):", 0, 100, 100)
-            with f_col3:
-                filtro_sma = st.checkbox("Precios por DEBAJO de la SMA 200 (Tendencia bajista corto plazo)")
+# =========================================================
+# PESTAÑA 2: ESCÁNER AUTOMÁTICO DE PAREJAS Y CESTAS
+# =========================================================
+with tab_scanner:
+    st.subheader(f"🔍 Escáner Automático de Predictores para `{target_ticker}`")
+    st.markdown(
+        "Este motor prueba automáticamente todas las combinaciones posibles de **1, 2 y 3 activos** de tu lista de candidatos "
+        "y las clasifica según su rendimiento **Out-of-Sample (Prueba)** para descubrir qué activos esconden la mayor ventaja estadística."
+    )
 
-            if filtro_caida == "Solo caídas > 20%": df_tech = df_tech[df_tech['Caída Max 52S (%)'] <= -20]
-            elif filtro_caida == "Solo caídas > 30%": df_tech = df_tech[df_tech['Caída Max 52S (%)'] <= -30]
-                
-            df_tech = df_tech[df_tech['RSI'] <= max_rsi]
-            
-            if filtro_sma: df_tech = df_tech[df_tech['Desviación SMA 200 (%)'] < 0]
-                
-            def aplicar_colores_tech(columna):
-                colores = []
-                for valor in columna:
-                    if columna.name == 'RSI':
-                        color = 'background-color: #0b3d0b; color: #85e085' if valor < 30 else 'background-color: #4a0000; color: #ff6666' if valor > 70 else ''
-                    elif columna.name == 'Caída Max 52S (%)':
-                        color = 'background-color: #0b3d0b; color: #85e085' if valor <= -30 else 'color: #85e085' if valor <= -20 else 'background-color: #4a0000; color: #ff6666' if valor >= 0 else ''
-                    elif columna.name == 'Dist. Mínimo 52S (%)':
-                        color = 'background-color: #0b3d0b; color: #85e085' if valor <= 5 else '' 
-                    elif columna.name == 'Desviación SMA 200 (%)':
-                        color = 'background-color: #0b3d0b; color: #85e085' if valor < 0 else 'background-color: #4a0000; color: #ff6666'
-                    else:
-                        color = ''
-                    colores.append(color)
-                return colores
+    col_s1, col_s2 = st.columns(2)
+    max_combo_size = col_s1.selectbox("Tamaño máximo de combinación de activos a probar:", [1, 2, 3], index=1)
+    only_relative_strength = col_s2.checkbox(
+        "Mostrar solo modelos con Fuerza Relativa natural (pesos + y - a la vez)",
+        value=False
+    )
 
-            st.write(f"**Resultados Técnicos:** {len(df_tech)} valores cumplen las condiciones.")
-            
-            if not df_tech.empty:
-                df_tech_estilizado = df_tech.style.apply(aplicar_colores_tech, axis=0)
-                st.dataframe(df_tech_estilizado, use_container_width=True, hide_index=True)
-                
-                st.markdown("<br>", unsafe_allow_html=True)
-                
-                buffer_excel_tech = io.BytesIO()
-                with pd.ExcelWriter(buffer_excel_tech, engine='openpyxl') as writer:
-                    df_tech_estilizado.to_excel(writer, index=False)
-                
-                tickers_aprobados = df_tech['Ticker'].tolist()
-                df_fundamental_filtrado = df_mostrar[df_mostrar['Ticker'].isin(tickers_aprobados)].reset_index(drop=True)
-                df_fundamental_estilizado = df_fundamental_filtrado.style.apply(aplicar_estilos, axis=None)
-                
-                buffer_excel_fund = io.BytesIO()
-                with pd.ExcelWriter(buffer_excel_fund, engine='openpyxl') as writer:
-                    df_fundamental_estilizado.to_excel(writer, index=False)
-                
-                col_btn1, col_btn2 = st.columns(2)
-                with col_btn1:
-                    st.download_button(
-                        label="📥 Descargar Resultados Técnicos", 
-                        data=buffer_excel_tech.getvalue(), 
-                        file_name=f"Radar_Tecnico_{fecha_hoy}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-                with col_btn2:
-                    st.download_button(
-                        label="📥 Descargar Fundamental de las Elegidas", 
-                        data=buffer_excel_fund.getvalue(), 
-                        file_name=f"Radar_Fundamental_Filtrado_{fecha_hoy}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                    )
-            else:
-                st.warning("Ninguna empresa cumple con estos filtros técnicos tan estrictos.")
+    if st.button("🚀 Ejecutar Escáner Cuantitativo Ahora", type="primary"):
+        combos_to_test = []
+        for r in range(1, max_combo_size + 1):
+            combos_to_test.extend(list(combinations(valid_candidates, r)))
 
-else: 
-    st.markdown("""
-    <div style="text-align: center; margin-top: 50px;">
-        <h1 style="color: #E50914; font-size: 60px;">RADAR PRO V3</h1>
-        <p style="color: #888888; font-size: 20px;">Tu radar está completamente vacío. Busca empresas manualmente o escanea un índice.</p>
-    </div>
-    """, unsafe_allow_html=True)
+        results_list = []
+        progress_bar = st.progress(0, text="Analizando combinaciones de activos...")
+
+        for idx, combo in enumerate(combos_to_test):
+            combo_list = list(combo)
+            res = evaluate_strategy(returns_df, target_ticker, combo_list, horizon, train_Pct, force_rs)
+            
+            w = res["weights"]
+            is_rs = (any(val > 0 for val in w) and any(val < 0 for val in w))
+            
+            if only_relative_strength and not is_rs:
+                continue
+
+            # Solo guardar modelos que sean positivos tanto en Train como en Test para evitar casualidades
+            if res["train_metrics"]["mean_pct"] > 0:
+                weights_str = ", ".join([f"{f} ({val:+.2f})" for f, val in zip(combo_list, w)])
+                pred_now = res["live_pred_pct"]
+                results_list.append({
+                    "Activos Predictores": " + ".join(combo_list),
+                    "Fuerza Relativa (+/-)": "✅ Sí" if is_rs else "No",
+                    "Pesos (w)": weights_str,
+                    "Retorno Medio Trade (Test %)": round(res["test_metrics"]["mean_pct"], 3),
+                    "Win Rate (Test %)": round(res["test_metrics"]["win_rate"], 1),
+                    "Sharpe (Test)": round(res["test_metrics"]["sharpe"], 2),
+                    "Retorno Medio (Train %)": round(res["train_metrics"]["mean_pct"], 3),
+                    f"Señal Hoy ({horizon}d)": f"{'🟢 LONG' if pred_now > 0 else '🔴 SHORT'} ({pred_now:+.2f}%)"
+                })
+            
+            progress_bar.progress((idx + 1) / len(combos_to_test))
+
+        progress_bar.empty()
+
+        if not results_list:
+            st.warning("No se encontraron combinaciones con expectativa positiva. Prueba a añadir más activos o cambiar el horizonte de días.")
+        else:
+            scanner_df = pd.DataFrame(results_list)
+            scanner_df = scanner_df.sort_values(by="Retorno Medio Trade (Test %)", ascending=False).head(15)
+            st.success(f"✅ Escaneo completado ({len(combos_to_test)} modelos evaluados). Aquí tienes el **Top 15 Out-of-Sample**:")
+            st.dataframe(scanner_df, use_container_width=True, hide_index=True)
+            st.caption(
+                "💡 **Consejo:** Copia los activos de tu fila favorita y selecciónalos en el panel izquierdo "
+                "para ver su curva de equidad detallada en la Pestaña 1."
+            )
