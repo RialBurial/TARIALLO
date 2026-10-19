@@ -16,16 +16,84 @@ st.set_page_config(
 
 st.title("📈 Analizador Cuantitativo de Retornos Cruzados y Fuerza Relativa")
 st.markdown(
-    "Flujo profesional en 2 pasos: **1º Rastrea** las mejores combinaciones fuera de muestra en el Escáner "
-    "y **2º Audita** los 3 modelos en paralelo (Base AR, Cruzado Puro y Mixto ARDL) con diagnóstico automático."
+    "Flujo profesional en **3 Pasos**: **1º Descubridor Universal** (encuentra qué activos mueven a tu objetivo), "
+    "**2º Escáner de Combinaciones** (crea las mejores parejas/tríos) y **3º Auditoría de los 3 Modelos** (señal y diagnóstico final)."
 )
 
 # ---------------------------------------------------------
-# BARRA LATERAL: CONFIGURACIÓN LIMPÍA Y DIRECTA
+# CATÁLOGO MAESTRO UNIVERSAL (~55 ACTIVOS LÍDERES DEL MUNDO)
 # ---------------------------------------------------------
-st.sidebar.header("⚙️ 1. Universo de Activos")
+MASTER_UNIVERSE = {
+    # Índices EE.UU. y Globales
+    "SPY": ("S&P 500 ETF", "Índices EE.UU."),
+    "QQQ": ("Nasdaq 100 ETF", "Índices EE.UU."),
+    "DIA": ("Dow Jones ETF", "Índices EE.UU."),
+    "IWM": ("Russell 2000 Small Caps", "Índices EE.UU."),
+    "^GDAXI": ("DAX 40 Alemania", "Índices Globales"),
+    "^STOXX50E": ("Euro Stoxx 50", "Índices Globales"),
+    "^IBEX": ("IBEX 35 España", "Índices Globales"),
+    "^N225": ("Nikkei 225 Japón", "Índices Globales"),
+    "FXI": ("China Large-Cap ETF", "Índices Globales"),
+    "EEM": ("Mercados Emergentes ETF", "Índices Globales"),
+    # Sectores Oficiales Wall Street (SPDR + Semis)
+    "XLK": ("Sector Tecnología", "Sectores EE.UU."),
+    "SMH": ("Sector Semiconductores", "Sectores EE.UU."),
+    "XLF": ("Sector Financiero / Bancos", "Sectores EE.UU."),
+    "XLE": ("Sector Energía", "Sectores EE.UU."),
+    "XLV": ("Sector Salud", "Sectores EE.UU."),
+    "XLI": ("Sector Industrial", "Sectores EE.UU."),
+    "XLY": ("Consumo Discrecional", "Sectores EE.UU."),
+    "XLP": ("Consumo Básico / Defensivo", "Sectores EE.UU."),
+    "XLU": ("Utilidades / Eléctricas", "Sectores EE.UU."),
+    "XLB": ("Materiales Básicos", "Sectores EE.UU."),
+    "XLRE": ("Sector Inmobiliario (REITs)", "Sectores EE.UU."),
+    "XLC": ("Servicios de Comunicación", "Sectores EE.UU."),
+    # Macro, Bonos y Volatilidad
+    "TLT": ("Bonos Tesoro EE.UU. +20 Años", "Macro y Renta Fija"),
+    "IEF": ("Bonos Tesoro EE.UU. 7-10 Años", "Macro y Renta Fija"),
+    "SHY": ("Bonos Tesoro EE.UU. 1-3 Años", "Macro y Renta Fija"),
+    "HYG": ("Bonos Alto Rendimiento (High Yield)", "Macro y Renta Fija"),
+    "LQD": ("Bonos Corporativos Grado Inversión", "Macro y Renta Fija"),
+    "^VIX": ("Índice de Volatilidad S&P 500", "Macro y Renta Fija"),
+    "DX-Y.NYB": ("Índice Dólar (DXY)", "Macro y Renta Fija"),
+    # Materias Primas y Divisas
+    "GLD": ("Oro ETF", "Materias Primas y Forex"),
+    "SLV": ("Plata ETF", "Materias Primas y Forex"),
+    "USO": ("Petróleo WTI ETF", "Materias Primas y Forex"),
+    "CPER": ("Cobre ETF (Termómetro Industrial)", "Materias Primas y Forex"),
+    "DBA": ("Agricultura Materias Primas", "Materias Primas y Forex"),
+    "EURUSD=X": ("Euro / Dólar", "Materias Primas y Forex"),
+    "USDJPY=X": ("Dólar / Yen Japonés", "Materias Primas y Forex"),
+    "GBPUSD=X": ("Libra / Dólar", "Materias Primas y Forex"),
+    # Mega-Caps (7 Magníficas + Líderes)
+    "NVDA": ("Nvidia Corp", "Acciones Líderes"),
+    "AAPL": ("Apple Inc", "Acciones Líderes"),
+    "MSFT": ("Microsoft Corp", "Acciones Líderes"),
+    "AMZN": ("Amazon.com", "Acciones Líderes"),
+    "META": ("Meta Platforms", "Acciones Líderes"),
+    "GOOGL": ("Alphabet / Google", "Acciones Líderes"),
+    "TSLA": ("Tesla Inc", "Acciones Líderes"),
+    "AMD": ("Advanced Micro Devices", "Acciones Líderes"),
+    "TSM": ("Taiwan Semiconductor", "Acciones Líderes"),
+    "JPM": ("JPMorgan Chase", "Acciones Líderes"),
+    "XOM": ("Exxon Mobil", "Acciones Líderes"),
+    # Cripto Líderes
+    "BTC-USD": ("Bitcoin", "Criptoactivos"),
+    "ETH-USD": ("Ethereum", "Criptoactivos"),
+    "SOL-USD": ("Solana", "Criptoactivos"),
+    "BNB-USD": ("Binance Coin", "Criptoactivos")
+}
+
+# ---------------------------------------------------------
+# BARRA LATERAL: CONFIGURACIÓN DEL FLUJO DE TRABAJO
+# ---------------------------------------------------------
+st.sidebar.header("⚙️ 1. Selección de Activos")
 
 presets = {
+    "Personalizado / Usar Descubridor": {
+        "target": "SPY",
+        "predictors": "QQQ, IWM, TLT, GLD, ^VIX, XLF, SMH"
+    },
     "Índices EE.UU. + Sectores y Macro": {
         "target": "SPY",
         "predictors": "QQQ, IWM, TLT, GLD, ^VIX, XLF, XLK, XLE, SMH"
@@ -36,19 +104,25 @@ presets = {
     },
     "Índices Globales y Divisas": {
         "target": "^GDAXI",
-        "predictors": "SPY, ^STOXX50E, ^IBEX, ^N225, EURUSD=X, GC=F, CL=F"
+        "predictors": "SPY, ^STOXX50E, ^IBEX, ^N225, EURUSD=X, GLD, USO"
     },
     "Cripto (Ejemplo del Vídeo MemLabs)": {
         "target": "ETH-USD",
-        "predictors": "BNB-USD, SOL-USD, BTC-USD, UNI7083-USD, AAVE-USD, LINK-USD, AVAX-USD"
-    },
-    "Personalizado (Escribir libremente)": {
-        "target": "SPY",
-        "predictors": "QQQ, TLT, GLD, ^VIX, IWM"
+        "predictors": "BNB-USD, SOL-USD, BTC-USD, LINK-USD, AVAX-USD"
     }
 }
 
 preset_choice = st.sidebar.selectbox("Plantillas rápidas de mercado:", list(presets.keys()))
+
+# Gestión de estado para que el botón del Descubridor pueda actualizar la caja de candidatos
+if "custom_predictors_str" not in st.session_state:
+    st.session_state.custom_predictors_str = presets[preset_choice]["predictors"]
+if "last_preset" not in st.session_state:
+    st.session_state.last_preset = preset_choice
+
+if st.session_state.last_preset != preset_choice:
+    st.session_state.custom_predictors_str = presets[preset_choice]["predictors"]
+    st.session_state.last_preset = preset_choice
 
 target_ticker = st.sidebar.text_input(
     "🎯 Activo Objetivo a Operar (X):",
@@ -57,9 +131,9 @@ target_ticker = st.sidebar.text_input(
 ).strip().upper()
 
 predictors_input = st.sidebar.text_area(
-    "🔗 Universo de Activos Candidatos (Y):",
-    value=presets[preset_choice]["predictors"],
-    help="Separados por coma. El Escáner probará todas las combinaciones posibles entre ellos."
+    "🔗 Universo de Activos Candidatos (Y) para Pestaña 2:",
+    key="custom_predictors_str",
+    help="Puedes escribirlos a mano separados por coma o enviarlos automáticamente desde la Pestaña 1 (Descubridor Universal)."
 )
 
 candidate_tickers = [
@@ -99,6 +173,9 @@ def load_market_data(tickers_list, years):
     else:
         closes = data[["Close"]]
         closes.columns = tickers_list
+    # Conservar columnas con al menos el 70% de datos válidos y alinear fechas
+    min_valid = int(len(closes) * 0.7)
+    closes = closes.dropna(axis=1, thresh=min_valid)
     closes = closes.ffill().dropna()
     return closes
 
@@ -165,11 +242,11 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
         "latest_features": latest_features.iloc[0] * 100.0
     }
 
-# Descarga y validación de datos
-all_requested_tickers = list(dict.fromkeys([target_ticker] + candidate_tickers))
+# Descarga inicial para el activo objetivo y los candidatos actuales de la barra lateral
+base_tickers = list(dict.fromkeys([target_ticker] + candidate_tickers))
 
-with st.spinner(f"Descargando y alineando datos de mercado para {len(all_requested_tickers)} activos..."):
-    closes_df = load_market_data(all_requested_tickers, years_back)
+with st.spinner(f"Descargando cotizaciones para `{target_ticker}` y tus candidatos activos..."):
+    closes_df = load_market_data(base_tickers, years_back)
 
 if target_ticker not in closes_df.columns:
     st.error(f"❌ No se encontraron datos para el activo objetivo `{target_ticker}`. Revisa el símbolo en Yahoo Finance.")
@@ -180,25 +257,64 @@ missing_tickers = set(candidate_tickers) - set(valid_candidates)
 if missing_tickers:
     st.warning(f"⚠️ No se pudieron descargar datos para: {', '.join(missing_tickers)}. Se omitirán del análisis.")
 
-if not valid_candidates:
-    st.error("❌ Necesitas al menos un activo candidato válido en la barra lateral.")
-    st.stop()
-
 if len(closes_df) < horizon * 10:
     st.error("❌ No hay suficiente histórico para este horizonte. Reduce los días de horizonte o amplía los años.")
     st.stop()
 
 returns_df = closes_df.pct_change(horizon).dropna()
 
-# Evaluación del Modelo 1 Base (AR) para tener siempre la referencia lista
+# Evaluación del Modelo 1 Base (AR) como referencia global
 ar_res = evaluate_strategy(returns_df, target_ticker, [target_ticker], horizon, train_pct)
 ar_test_mean = ar_res["test_metrics"]["mean_pct"]
 ar_test_wr = ar_res["test_metrics"]["win_rate"]
 ar_test_sharpe = ar_res["test_metrics"]["sharpe"]
 
 # ---------------------------------------------------------
-# CÁLCULO AUTOMÁTICO DEL ESCÁNER (SIN BOTONES EXTRA)
+# FUNCIONES DE CACHÉ PARA PESTAÑA 1 Y PESTAÑA 2
 # ---------------------------------------------------------
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_universal_discovery(target, years, horizon_days, train_ratio, categories_selected):
+    universe_tickers = [
+        t for t, info in MASTER_UNIVERSE.items()
+        if info[1] in categories_selected and t != target
+    ]
+    all_tickers = list(dict.fromkeys([target] + universe_tickers))
+    df_closes = load_market_data(all_tickers, years)
+    if target not in df_closes.columns:
+        return []
+
+    df_rets = df_closes.pct_change(horizon_days).dropna()
+    ar_base = evaluate_strategy(df_rets, target, [target], horizon_days, train_ratio)
+    ar_ref_mean = ar_base["test_metrics"]["mean_pct"]
+
+    discovered = []
+    for cand in universe_tickers:
+        if cand not in df_rets.columns:
+            continue
+        res = evaluate_strategy(df_rets, target, [cand], horizon_days, train_ratio)
+        w = float(res["weights"][0])
+        train_m = res["train_metrics"]["mean_pct"]
+        test_m = res["test_metrics"]["mean_pct"]
+        test_wr = res["test_metrics"]["win_rate"]
+        test_sh = res["test_metrics"]["sharpe"]
+
+        # Filtrar activos que funcionaron en entrenamiento y mantienen expectativa positiva en Test
+        if train_m > 0 and test_m > 0:
+            name_desc, cat_name = MASTER_UNIVERSE.get(cand, (cand, "Otro"))
+            discovered.append({
+                "Ticker": cand,
+                "Nombre del Activo": name_desc,
+                "Categoría": cat_name,
+                "Relación Aprendida": "📈 Tendencia (+)" if w > 0 else "🔄 Reversión (-)",
+                "Peso (w)": round(w, 4),
+                "Retorno Medio Trade (Test %)": round(test_m, 3),
+                "Diferencial vs AR (%)": round(test_m - ar_ref_mean, 3),
+                "Win Rate (Test %)": round(test_wr, 1),
+                "Sharpe (Test)": round(test_sh, 2),
+                "Retorno Medio (Train %)": round(train_m, 3)
+            })
+    return discovered
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio, max_r, only_rs, ar_mean_ref):
     combos = []
@@ -234,107 +350,180 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
     return rows, len(combos)
 
 # ---------------------------------------------------------
-# PESTAÑAS REORGANIZADAS: 1º ESCÁNER | 2º AUDITORÍA DE 3 MODELOS
+# ESTRUCTURA DE 3 PESTAÑAS EN ORDEN DE FLUJO DE TRABAJO
 # ---------------------------------------------------------
-tab_scanner, tab_models = st.tabs([
-    "🔍 1. Escáner Automático (El Radar de Parejas)",
-    "📊 2. Auditoría de los 3 Modelos y Señal Operativa"
+tab_discovery, tab_scanner, tab_models = st.tabs([
+    "🌍 1. Descubridor Universal de Activos",
+    "🔍 2. Escáner de Combinaciones (Radar de Parejas)",
+    "📊 3. Auditoría de los 3 Modelos"
 ])
 
 # =========================================================
-# PESTAÑA 1: ESCÁNER AUTOMÁTICO (EJECUCIÓN INSTANTÁNEA)
+# PESTAÑA 1: DESCUBRIDOR UNIVERSAL DE ACTIVOS
 # =========================================================
-with tab_scanner:
-    st.subheader(f"🔍 Radar Automático de Mejores Predictores para `{target_ticker}`")
+with tab_discovery:
+    st.subheader(f"🌍 Descubridor Universal de Candidatos para `{target_ticker}`")
     st.markdown(
-        f"**Referencia a batir (Modelo Base AR - Solo `{target_ticker}` en Test):** "
-        f"Retorno Medio: **`{ar_test_mean:+.2f}%`** | Win Rate: **`{ar_test_wr:.1f}%`** | Sharpe: **`{ar_test_sharpe:.2f}`**"
+        f"¿No sabes qué activos predicen mejor a **`{target_ticker}`**? Este motor rastrea un **Catálogo Maestro de ~50 activos líderes mundiales** "
+        f"(Índices, los 11 Sectores de Wall Street, Bonos/Macro, Materias Primas, Forex, Mega-Caps y Cripto) para descubrir cuáles tienen mayor poder predictivo individual."
     )
 
-    col_f1, col_f2, col_f3 = st.columns([1, 1, 1.2])
-    max_combo_size = col_f1.selectbox("Tamaño máximo de combinación:", [1, 2, 3], index=2)
-    sort_criterion = col_f2.selectbox(
-        "Ordenar Ranking Top 15 por:",
+    all_categories = list(dict.fromkeys([info[1] for info in MASTER_UNIVERSE.values()]))
+    col_d1, col_d2, col_d3 = st.columns([1.8, 1, 1])
+
+    selected_cats = col_d1.multiselect(
+        "Categorías del Universo Maestro a rastrear:",
+        options=all_categories,
+        default=all_categories
+    )
+    top_n_to_send = col_d2.slider("Nº de mejores candidatos a seleccionar:", min_value=4, max_value=15, value=8)
+    discovery_sort = col_d3.selectbox(
+        "Ordenar candidatos descubiertos por:",
         ["Sharpe (Test)", "Retorno Medio Trade (Test %)", "Win Rate (Test %)"],
         index=0
     )
-    only_relative_strength = col_f3.checkbox(
-        "Mostrar solo Fuerza Relativa natural (pesos + y - a la vez)",
-        value=True
-    )
 
-    scanner_rows, total_evaluated = run_full_scanner(
-        returns_df, target_ticker, valid_candidates, horizon, train_pct,
-        max_combo_size, only_relative_strength, ar_test_mean
-    )
+    if st.button(f"🚀 Rastrear el Mercado Mundial para `{target_ticker}`", type="primary"):
+        with st.spinner(f"Analizando más de 50 activos globales frente a `{target_ticker}`..."):
+            st.session_state.discovery_results = run_universal_discovery(
+                target_ticker, years_back, horizon, train_pct, selected_cats
+            )
+            st.session_state.discovery_target = target_ticker
 
-    if not scanner_rows:
-        st.warning("No se encontraron combinaciones con estos filtros. Desmarca la casilla de Fuerza Relativa o añade más activos.")
-        selected_for_tab2 = valid_candidates[:2]
+    if "discovery_results" in st.session_state and st.session_state.get("discovery_target") == target_ticker:
+        disc_list = st.session_state.discovery_results
+        if not disc_list:
+            st.warning("No se encontraron candidatos con expectativa positiva en las categorías seleccionadas.")
+        else:
+            disc_df = pd.DataFrame(disc_list).sort_values(by=discovery_sort, ascending=False).reset_index(drop=True)
+            top_tickers_list = disc_df["Ticker"].head(top_n_to_send).tolist()
+            top_tickers_str = ", ".join(top_tickers_list)
+
+            st.success(
+                f"✅ **¡Rastreo completado!** Se han encontrado **{len(disc_df)} activos** con ventaja estadística real (Train > 0 y Test > 0) para predecir a `{target_ticker}`."
+            )
+            st.dataframe(disc_df, use_container_width=True, hide_index=True)
+
+            st.markdown("#### 🎯 Tus Mejores Candidatos Descubiertos (Listos para la Pestaña 2)")
+            st.code(top_tickers_str, language="text")
+
+            def send_to_scanner_callback(tickers_string):
+                st.session_state.custom_predictors_str = tickers_string
+
+            st.button(
+                f"⚡ Enviar este Top {len(top_tickers_list)} directamente al Universo de Candidatos (Barra Lateral / Pestaña 2)",
+                on_click=send_to_scanner_callback,
+                args=(top_tickers_str,),
+                type="secondary"
+            )
+            st.caption(
+                "💡 Al pulsar el botón de arriba (o copiando y pegando los que más te gusten en la caja de la barra lateral izquierda), "
+                "pasa directamente a la **Pestaña 2 (🔍 Escáner de Combinaciones)**."
+            )
     else:
-        scanner_df = pd.DataFrame(scanner_rows)
-        scanner_df = scanner_df.sort_values(by=sort_criterion, ascending=False).head(15).reset_index(drop=True)
-
-        st.success(
-            f"✅ **{total_evaluated} combinaciones evaluadas al instante.** "
-            f"Aquí tienes el **Top 15 Out-of-Sample** ordenado por **{sort_criterion}**:"
+        st.info(
+            f"👆 Pulsa el botón **Rastrear el Mercado Mundial para `{target_ticker}`** para que la app descubra automáticamente qué activos mueven a `{target_ticker}`, "
+            f"o pasa directamente a la **Pestaña 2** si ya tienes tus propios candidatos escritos en la barra lateral."
         )
 
-        display_cols = [c for c in scanner_df.columns if c != "combo_list"]
-        st.dataframe(scanner_df[display_cols], use_container_width=True, hide_index=True)
+# =========================================================
+# PESTAÑA 2: ESCÁNER DE COMBINACIONES (EL RADAR DE PAREJAS)
+# =========================================================
+with tab_scanner:
+    st.subheader(f"🔍 Escáner de Combinaciones (Radar de Parejas y Tríos) para `{target_ticker}`")
+    
+    if not valid_candidates:
+        st.warning("👈 Añade candidatos en la barra lateral izquierda o usa la Pestaña 1 (Descubridor Universal) para rellenarlos automáticamente.")
+        selected_for_tab3 = []
+    else:
+        st.markdown(
+            f"**Candidatos activos analizados ({len(valid_candidates)}):** `{', '.join(valid_candidates)}`  \n"
+            f"**Referencia a batir (Modelo 1 Base AR - Solo `{target_ticker}` en Test):** "
+            f"Retorno Medio: **`{ar_test_mean:+.2f}%`** | Win Rate: **`{ar_test_wr:.1f}%`** | Sharpe: **`{ar_test_sharpe:.2f}`**"
+        )
 
-        st.divider()
-        st.markdown("### 🎯 Puente Directo al Análisis Profundo (Pestaña 2)")
-        
-        combo_options = [
-            f"#{i+1}: {row['Activos Predictores']}  —  [Sharpe: {row['Sharpe (Test)']} | Win Rate: {row['Win Rate (Test %)']}% | Test: {row['Retorno Medio Trade (Test %)']:+.2f}%]"
-            for i, row in scanner_df.iterrows()
-        ]
-        combo_options.append("🛠️ Selección Manual Personalizada")
-
-        chosen_option = st.selectbox(
-            "Elige qué combinación quieres auditar a fondo en la Pestaña 2 (por defecto ya está cargada la #1):",
-            options=combo_options,
+        col_f1, col_f2, col_f3 = st.columns([1, 1, 1.2])
+        max_combo_size = col_f1.selectbox("Tamaño máximo de combinación:", [1, 2, 3], index=2)
+        sort_criterion = col_f2.selectbox(
+            "Ordenar Ranking Top 15 por:",
+            ["Sharpe (Test)", "Retorno Medio Trade (Test %)", "Win Rate (Test %)"],
             index=0
         )
+        only_relative_strength = col_f3.checkbox(
+            "Mostrar solo Fuerza Relativa natural (pesos + y - a la vez)",
+            value=True
+        )
 
-        if chosen_option == "🛠️ Selección Manual Personalizada":
-            selected_for_tab2 = st.multiselect(
-                "Selecciona manualmente los activos para la Pestaña 2:",
-                options=valid_candidates,
-                default=valid_candidates[:2]
-            )
+        scanner_rows, total_evaluated = run_full_scanner(
+            returns_df, target_ticker, valid_candidates, horizon, train_pct,
+            max_combo_size, only_relative_strength, ar_test_mean
+        )
+
+        if not scanner_rows:
+            st.warning("No se encontraron combinaciones con estos filtros. Desmarca la casilla de Fuerza Relativa o envía más candidatos desde la Pestaña 1.")
+            selected_for_tab3 = valid_candidates[:2]
         else:
-            chosen_idx = int(chosen_option.split(":")[0].replace("#", "")) - 1
-            selected_for_tab2 = scanner_df.iloc[chosen_idx]["combo_list"]
-            st.info(
-                f"👉 Tienes cargada la combinación **`{' + '.join(selected_for_tab2)}`**. "
-                f"Haz clic arriba en la **Pestaña 2 (📊 Auditoría de los 3 Modelos)** para ver la comparativa completa y las conclusiones."
+            scanner_df = pd.DataFrame(scanner_rows)
+            scanner_df = scanner_df.sort_values(by=sort_criterion, ascending=False).head(15).reset_index(drop=True)
+
+            st.success(
+                f"✅ **{total_evaluated} combinaciones evaluadas al instante.** "
+                f"Aquí tienes el **Top 15 Out-of-Sample** ordenado por **{sort_criterion}**:"
             )
+
+            display_cols = [c for c in scanner_df.columns if c != "combo_list"]
+            st.dataframe(scanner_df[display_cols], use_container_width=True, hide_index=True)
+
+            st.divider()
+            st.markdown("### 🎯 Puente Directo a la Auditoría Final (Pestaña 3)")
+
+            combo_options = [
+                f"#{i+1}: {row['Activos Predictores']}  —  [Sharpe: {row['Sharpe (Test)']} | Win Rate: {row['Win Rate (Test %)']}% | Test: {row['Retorno Medio Trade (Test %)']:+.2f}%]"
+                for i, row in scanner_df.iterrows()
+            ]
+            combo_options.append("🛠️ Selección Manual Personalizada")
+
+            chosen_option = st.selectbox(
+                "Elige qué combinación del radar quieres auditar a fondo en la Pestaña 3 (por defecto ya está cargada la #1):",
+                options=combo_options,
+                index=0
+            )
+
+            if chosen_option == "🛠️ Selección Manual Personalizada":
+                selected_for_tab3 = st.multiselect(
+                    "Selecciona manualmente los activos para la Pestaña 3:",
+                    options=valid_candidates,
+                    default=valid_candidates[:2]
+                )
+            else:
+                chosen_idx = int(chosen_option.split(":")[0].replace("#", "")) - 1
+                selected_for_tab3 = scanner_df.iloc[chosen_idx]["combo_list"]
+                st.info(
+                    f"👉 Tienes seleccionada la combinación ganadora **`{' + '.join(selected_for_tab3)}`**. "
+                    f"Pasa a la **Pestaña 3 (📊 Auditoría de los 3 Modelos)** para ver el combate cara a cara y la conclusión operativa."
+                )
 
 # =========================================================
-# PESTAÑA 2: AUDITORÍA DE LOS 3 MODELOS EN PARALELO
+# PESTAÑA 3: AUDITORÍA DE LOS 3 MODELOS EN PARALELO
 # =========================================================
 with tab_models:
-    if not selected_for_tab2:
-        st.warning("👈 Selecciona al menos un activo en la Pestaña 1 para auditar los modelos.")
+    if not selected_for_tab3:
+        st.warning("👈 Selecciona al menos una combinación en la Pestaña 2 para auditar los modelos.")
         st.stop()
 
     # Calcular los 3 modelos simultáneamente
     # Modelo 1: Base Autorregresivo (Solo Target) -> ar_res
     # Modelo 2: Retornos Cruzados Puros (Solo Predictores Externos)
-    dl_res = evaluate_strategy(returns_df, target_ticker, selected_for_tab2, horizon, train_pct)
+    dl_res = evaluate_strategy(returns_df, target_ticker, selected_for_tab3, horizon, train_pct)
     # Modelo 3: Mixto ARDL (Target + Predictores Externos)
-    ardl_features = [target_ticker] + selected_for_tab2
+    ardl_features = [target_ticker] + selected_for_tab3
     ardl_res = evaluate_strategy(returns_df, target_ticker, ardl_features, horizon, train_pct)
 
-    # Determinar automáticamente cuál es el Mejor Modelo en Out-of-Sample
     models_summary = [
         {"id": 1, "name": f"Modelo 1: Base AR (Solo {target_ticker})", "res": ar_res},
-        {"id": 2, "name": f"Modelo 2: Cruzado Puro ({' + '.join(selected_for_tab2)})", "res": dl_res},
-        {"id": 3, "name": f"Modelo 3: Mixto ARDL ({target_ticker} + {' + '.join(selected_for_tab2)})", "res": ardl_res}
+        {"id": 2, "name": f"Modelo 2: Cruzado Puro ({' + '.join(selected_for_tab3)})", "res": dl_res},
+        {"id": 3, "name": f"Modelo 3: Mixto ARDL ({target_ticker} + {' + '.join(selected_for_tab3)})", "res": ardl_res}
     ]
-    # Criterio de ganador: Mayor Retorno Medio en Test (siempre que Sharpe sea positivo)
     best_model = max(models_summary, key=lambda x: x["res"]["test_metrics"]["mean_pct"])
 
     # ---------------------------------------------------------
@@ -369,7 +558,6 @@ with tab_models:
         f"{best_model['res']['test_metrics']['win_rate']:.1f}%  |  Sharpe {best_model['res']['test_metrics']['sharpe']:.2f}"
     )
 
-    # Tabla comparativa cara a cara de los 3 modelos
     st.markdown("#### 🏆 Tabla Comparativa Cara a Cara (Entrenamiento vs. Prueba Real)")
     comp_rows = []
     for m in models_summary:
@@ -399,12 +587,12 @@ with tab_models:
     ))
     fig_eq.add_trace(go.Scatter(
         x=dl_res["df_model"].index, y=dl_res["df_model"]["Equity_Curve"],
-        mode="lines", name=f"Modelo 2: Cruzado Puro ({' + '.join(selected_for_tab2)})",
+        mode="lines", name=f"Modelo 2: Cruzado Puro ({' + '.join(selected_for_tab3)})",
         line=dict(color="#2563eb", width=3)
     ))
     fig_eq.add_trace(go.Scatter(
         x=ardl_res["df_model"].index, y=ardl_res["df_model"]["Equity_Curve"],
-        mode="lines", name=f"Modelo 3: Mixto ARDL ({target_ticker} + {' + '.join(selected_for_tab2)})",
+        mode="lines", name=f"Modelo 3: Mixto ARDL ({target_ticker} + {' + '.join(selected_for_tab3)})",
         line=dict(color="#10b981", width=2.5)
     ))
 
@@ -432,7 +620,7 @@ with tab_models:
     # ---------------------------------------------------------
     # FUNCIÓN AUXILIAR PARA PINTAR LA RADIOGRAFÍA DE CADA MODELO
     # ---------------------------------------------------------
-    def render_model_radiography(res_obj, title_color="#2563eb"):
+    def render_model_radiography(res_obj):
         col_t, col_g = st.columns([1.3, 1])
         w_df = pd.DataFrame({
             "Activo Predictor": res_obj["features"],
@@ -470,7 +658,6 @@ with tab_models:
 
     render_model_radiography(ar_res)
 
-    # Conclusión Final Automática del Modelo 1
     ar_w = ar_res["weights"][0]
     ar_style = "Tendencial (cuando sube, tiende a seguir subiendo)" if ar_w > 0 else "de Reversión a la Media (cuando cae, tiende a rebotar)"
     if ar_test_mean > 0 and ar_test_sharpe > 0.8:
@@ -496,7 +683,7 @@ with tab_models:
     dl_sharpe = dl_res["test_metrics"]["sharpe"]
     dl_diff_ar = dl_mean - ar_test_mean
 
-    st.subheader(f"2️⃣ Modelo 2: Retornos Cruzados Puros (`{' + '.join(selected_for_tab2)}` sin `{target_ticker}`)")
+    st.subheader(f"2️⃣ Modelo 2: Retornos Cruzados Puros (`{' + '.join(selected_for_tab3)}` sin `{target_ticker}`)")
     m2_c1, m2_c2, m2_c3, m2_c4 = st.columns(4)
     m2_c1.metric(f"Señal Hoy ({horizon}d)", f"{'🟢 LONG' if dl_res['live_pred_pct'] > 0 else '🔴 SHORT'} ({dl_res['live_pred_pct']:+.2f}%)")
     m2_c2.metric("Retorno Medio / Trade (Test)", f"{dl_mean:+.2f}%", delta=f"{dl_diff_ar:+.2f}% vs Modelo 1 (AR)")
@@ -505,22 +692,21 @@ with tab_models:
 
     render_model_radiography(dl_res)
 
-    # Conclusión Final Automática del Modelo 2
     has_rs_2 = any(w > 0 for w in dl_res["weights"]) and any(w < 0 for w in dl_res["weights"])
     rs_text = "Además, aprovecha un patrón de **Fuerza Relativa (+/-)** entre sus activos. " if has_rs_2 else ""
 
     if dl_mean > 0 and dl_diff_ar >= 0:
         st.success(
-            f"✅ **Conclusión Final del Modelo 2 (APROBADO — VENTAJA REAL):** Usar **`{' + '.join(selected_for_tab2)}`** "
+            f"✅ **Conclusión Final del Modelo 2 (APROBADO — VENTAJA REAL):** Usar **`{' + '.join(selected_for_tab3)}`** "
             f"bate al activo en solitario por **`{dl_diff_ar:+.2f}%`** por operación en la prueba real, alcanzando un Win Rate del **`{dl_wr:.1f}%`** "
             f"y un Sharpe de **`{dl_sharpe:.2f}`**. {rs_text}"
             f"Su proyección actual para los próximos {horizon} días es **{'ALCISTA (LONG)' if dl_res['live_pred_pct'] > 0 else 'BAJISTA (SHORT)'} ({dl_res['live_pred_pct']:+.2f}%)**."
         )
     elif dl_mean > 0 and dl_diff_ar < 0:
         st.warning(
-            f"⚠️ **Conclusión Final del Modelo 2 (RENTABLE PERO INEFICIENTE VS AR):** Aunque usar **`{' + '.join(selected_for_tab2)}`** "
+            f"⚠️ **Conclusión Final del Modelo 2 (RENTABLE PERO INEFICIENTE VS AR):** Aunque usar **`{' + '.join(selected_for_tab3)}`** "
             f"gana dinero en Test (**`{dl_mean:+.2f}%`** por operación, Win Rate **`{dl_wr:.1f}%`**), rinde **`{dl_diff_ar:.2f}%`** menos que "
-            f"el Modelo 1 Base. Te recomiendo elegir una pareja más alta del Ranking en la Pestaña 1 que tenga Diferencial vs AR positivo."
+            f"el Modelo 1 Base. Te recomiendo elegir una pareja más alta del Ranking en la Pestaña 2 que tenga Diferencial vs AR positivo."
         )
     else:
         st.error(
@@ -539,7 +725,7 @@ with tab_models:
     ardl_diff_dl = ardl_mean - dl_mean
     ardl_diff_ar = ardl_mean - ar_test_mean
 
-    st.subheader(f"3️⃣ Modelo 3: Mixto ARDL (`{target_ticker}` + `{' + '.join(selected_for_tab2)}`)")
+    st.subheader(f"3️⃣ Modelo 3: Mixto ARDL (`{target_ticker}` + `{' + '.join(selected_for_tab3)}`)")
     m3_c1, m3_c2, m3_c3, m3_c4 = st.columns(4)
     m3_c1.metric(f"Señal Hoy ({horizon}d)", f"{'🟢 LONG' if ardl_res['live_pred_pct'] > 0 else '🔴 SHORT'} ({ardl_res['live_pred_pct']:+.2f}%)")
     m3_c2.metric("Retorno Medio / Trade (Test)", f"{ardl_mean:+.2f}%", delta=f"{ardl_diff_dl:+.2f}% vs Modelo 2 (Cruzado)")
@@ -548,17 +734,16 @@ with tab_models:
 
     render_model_radiography(ardl_res)
 
-    # Conclusión Final Automática del Modelo 3
     if ardl_mean > dl_mean and ardl_mean > ar_test_mean:
         st.success(
             f"✅ **Conclusión Final del Modelo 3 (SINERGIA PERFECTA — MEJOR OPCIÓN):** Añadir el propio `{target_ticker}` junto a "
-            f"**`{' + '.join(selected_for_tab2)}`** mejora aún más al Modelo 2 en **`{ardl_diff_dl:+.2f}%`** por operación y supera al Modelo 1 Base en **`{ardl_diff_ar:+.2f}%`**. "
+            f"**`{' + '.join(selected_for_tab3)}`** mejora aún más al Modelo 2 en **`{ardl_diff_dl:+.2f}%`** por operación y supera al Modelo 1 Base en **`{ardl_diff_ar:+.2f}%`**. "
             f"Ambos mundos se complementan sin estorbarse. Haz caso a la señal de este Modelo 3 (**{ardl_res['live_pred_pct']:+.2f}%**)."
         )
     elif ardl_mean < dl_mean:
         st.warning(
             f"⚠️ **Conclusión Final del Modelo 3 (COLINEALIDAD / REDUNDANCIA DETECTADA):** Al meter a `{target_ticker}` dentro de la fórmula junto a "
-            f"**`{' + '.join(selected_for_tab2)}`**, el retorno medio baja un **`{ardl_diff_dl:.2f}%`** respecto al Modelo 2 Cruzado Puro "
+            f"**`{' + '.join(selected_for_tab3)}`**, el retorno medio baja un **`{ardl_diff_dl:.2f}%`** respecto al Modelo 2 Cruzado Puro "
             f"(pasa de `{dl_mean:+.2f}%` a `{ardl_mean:+.2f}%`). Esto ocurre porque los predictores externos ya contienen la información del precio y al juntarlos se estorban. "
             f"**Quédate con el Modelo 2 (Cruzado Puro).**"
         )
