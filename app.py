@@ -21,7 +21,7 @@ st.markdown(
 )
 
 # ---------------------------------------------------------
-# CATÁLOGO MAESTRO UNIVERSAL (~55 ACTIVOS LÍDERES DEL MUNDO)
+# CATÁLOGO MAESTRO UNIVERSAL (~50 ACTIVOS LÍDERES DEL MUNDO)
 # ---------------------------------------------------------
 MASTER_UNIVERSE = {
     # Índices EE.UU. y Globales
@@ -55,7 +55,7 @@ MASTER_UNIVERSE = {
     "HYG": ("Bonos Alto Rendimiento (High Yield)", "Macro y Renta Fija"),
     "LQD": ("Bonos Corporativos Grado Inversión", "Macro y Renta Fija"),
     "^VIX": ("Índice de Volatilidad S&P 500", "Macro y Renta Fija"),
-    "DX-Y.NYB": ("Índice Dólar (DXY)", "Macro y Renta Fija"),
+    "UUP": ("Dólar Estadounidense Bullish ETF", "Macro y Renta Fija"),
     # Materias Primas y Divisas
     "GLD": ("Oro ETF", "Materias Primas y Forex"),
     "SLV": ("Plata ETF", "Materias Primas y Forex"),
@@ -114,7 +114,6 @@ presets = {
 
 preset_choice = st.sidebar.selectbox("Plantillas rápidas de mercado:", list(presets.keys()))
 
-# Gestión de estado para que el botón del Descubridor pueda actualizar la caja de candidatos
 if "custom_predictors_str" not in st.session_state:
     st.session_state.custom_predictors_str = presets[preset_choice]["predictors"]
 if "last_preset" not in st.session_state:
@@ -161,23 +160,59 @@ train_pct = st.sidebar.slider(
 )
 
 # ---------------------------------------------------------
-# MOTOR DE DATOS Y EVALUACIÓN MATEMÁTICA
+# MOTOR DE DATOS ROBUSTO (POR BLOQUES Y ANCLADO A TARGET X)
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def load_market_data(tickers_list, years):
+def load_aligned_market_data(target_sym, candidate_syms, years):
     end_date = datetime.today()
     start_date = end_date - timedelta(days=365 * years)
-    data = yf.download(tickers_list, start=start_date, end=end_date, auto_adjust=True, progress=False)
-    if isinstance(data.columns, pd.MultiIndex):
-        closes = data["Close"]
+
+    # 1. Descargar primero el Activo Objetivo (X) para fijar el calendario maestro
+    target_raw = yf.download(target_sym, start=start_date, end=end_date, auto_adjust=True, progress=False)
+    if target_raw.empty:
+        return pd.DataFrame()
+
+    if isinstance(target_raw.columns, pd.MultiIndex):
+        target_series = target_raw["Close"][target_sym] if target_sym in target_raw["Close"].columns else target_raw["Close"].iloc[:, 0]
     else:
-        closes = data[["Close"]]
-        closes.columns = tickers_list
-    # Conservar columnas con al menos el 70% de datos válidos y alinear fechas
-    min_valid = int(len(closes) * 0.7)
-    closes = closes.dropna(axis=1, thresh=min_valid)
-    closes = closes.ffill().dropna()
-    return closes
+        target_series = target_raw["Close"]
+
+    target_series = target_series.dropna()
+    if target_series.empty:
+        return pd.DataFrame()
+
+    master_df = pd.DataFrame({target_sym: target_series})
+    master_df.index = pd.to_datetime(master_df.index).tz_localize(None)
+
+    # 2. Descargar candidatos en bloques seguros de 15 para evitar bloqueos de Yahoo Finance
+    unique_cands = [c for c in dict.fromkeys(candidate_syms) if c != target_sym]
+    chunk_size = 15
+
+    for i in range(0, len(unique_cands), chunk_size):
+        chunk = unique_cands[i:i + chunk_size]
+        try:
+            raw = yf.download(chunk, start=start_date, end=end_date, auto_adjust=True, progress=False, threads=True)
+            if raw.empty:
+                continue
+            if isinstance(raw.columns, pd.MultiIndex):
+                closes_chunk = raw["Close"].copy()
+            else:
+                closes_chunk = pd.DataFrame({chunk[0]: raw["Close"]})
+
+            closes_chunk.index = pd.to_datetime(closes_chunk.index).tz_localize(None)
+            # Rellenar festivos en el calendario combinado y anclar exactamente a los días de cotización de X
+            combined_idx = master_df.index.union(closes_chunk.index).sort_values()
+            aligned_chunk = closes_chunk.reindex(combined_idx).ffill().reindex(master_df.index)
+
+            for col in aligned_chunk.columns:
+                # Aceptar el candidato si cubre al menos el 75% de la historia del activo objetivo X
+                if aligned_chunk[col].notna().mean() >= 0.75:
+                    master_df[col] = aligned_chunk[col]
+        except Exception:
+            continue
+
+    master_df = master_df.ffill().dropna()
+    return master_df
 
 def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_ratio):
     df = pd.DataFrame(index=df_returns.index)
@@ -243,19 +278,17 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
     }
 
 # Descarga inicial para el activo objetivo y los candidatos actuales de la barra lateral
-base_tickers = list(dict.fromkeys([target_ticker] + candidate_tickers))
+with st.spinner(f"Descargando cotizaciones alineadas al calendario de `{target_ticker}`..."):
+    closes_df = load_aligned_market_data(target_ticker, candidate_tickers, years_back)
 
-with st.spinner(f"Descargando cotizaciones para `{target_ticker}` y tus candidatos activos..."):
-    closes_df = load_market_data(base_tickers, years_back)
-
-if target_ticker not in closes_df.columns:
+if closes_df.empty or target_ticker not in closes_df.columns:
     st.error(f"❌ No se encontraron datos para el activo objetivo `{target_ticker}`. Revisa el símbolo en Yahoo Finance.")
     st.stop()
 
 valid_candidates = [c for c in candidate_tickers if c in closes_df.columns]
 missing_tickers = set(candidate_tickers) - set(valid_candidates)
 if missing_tickers:
-    st.warning(f"⚠️ No se pudieron descargar datos para: {', '.join(missing_tickers)}. Se omitirán del análisis.")
+    st.warning(f"⚠️ No se pudieron descargar o alinear datos para: {', '.join(missing_tickers)}. Se omitirán del análisis.")
 
 if len(closes_df) < horizon * 10:
     st.error("❌ No hay suficiente histórico para este horizonte. Reduce los días de horizonte o amplía los años.")
@@ -273,47 +306,52 @@ ar_test_sharpe = ar_res["test_metrics"]["sharpe"]
 # FUNCIONES DE CACHÉ PARA PESTAÑA 1 Y PESTAÑA 2
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def run_universal_discovery(target, years, horizon_days, train_ratio, categories_selected):
+def run_universal_discovery(target, years, horizon_days, train_ratio, categories_selected, only_pos_test):
     universe_tickers = [
         t for t, info in MASTER_UNIVERSE.items()
         if info[1] in categories_selected and t != target
     ]
-    all_tickers = list(dict.fromkeys([target] + universe_tickers))
-    df_closes = load_market_data(all_tickers, years)
-    if target not in df_closes.columns:
-        return []
+    df_closes = load_aligned_market_data(target, universe_tickers, years)
+    if df_closes.empty or target not in df_closes.columns:
+        return [], 0
 
     df_rets = df_closes.pct_change(horizon_days).dropna()
     ar_base = evaluate_strategy(df_rets, target, [target], horizon_days, train_ratio)
     ar_ref_mean = ar_base["test_metrics"]["mean_pct"]
 
     discovered = []
+    evaluated_count = 0
+
     for cand in universe_tickers:
         if cand not in df_rets.columns:
             continue
+        evaluated_count += 1
         res = evaluate_strategy(df_rets, target, [cand], horizon_days, train_ratio)
         w = float(res["weights"][0])
         train_m = res["train_metrics"]["mean_pct"]
         test_m = res["test_metrics"]["mean_pct"]
         test_wr = res["test_metrics"]["win_rate"]
         test_sh = res["test_metrics"]["sharpe"]
+        diff_ar = test_m - ar_ref_ar if "ar_ref_ar" in locals() else test_m - ar_ref_mean
 
-        # Filtrar activos que funcionaron en entrenamiento y mantienen expectativa positiva en Test
-        if train_m > 0 and test_m > 0:
-            name_desc, cat_name = MASTER_UNIVERSE.get(cand, (cand, "Otro"))
-            discovered.append({
-                "Ticker": cand,
-                "Nombre del Activo": name_desc,
-                "Categoría": cat_name,
-                "Relación Aprendida": "📈 Tendencia (+)" if w > 0 else "🔄 Reversión (-)",
-                "Peso (w)": round(w, 4),
-                "Retorno Medio Trade (Test %)": round(test_m, 3),
-                "Diferencial vs AR (%)": round(test_m - ar_ref_mean, 3),
-                "Win Rate (Test %)": round(test_wr, 1),
-                "Sharpe (Test)": round(test_sh, 2),
-                "Retorno Medio (Train %)": round(train_m, 3)
-            })
-    return discovered
+        if only_pos_test and test_m <= 0:
+            continue
+
+        name_desc, cat_name = MASTER_UNIVERSE.get(cand, (cand, "Otro"))
+        discovered.append({
+            "Ticker": cand,
+            "Nombre del Activo": name_desc,
+            "Categoría": cat_name,
+            "Relación Aprendida": "📈 Tendencia (+)" if w > 0 else "🔄 Reversión (-)",
+            "Peso (w)": round(w, 4),
+            "Retorno Medio Trade (Test %)": round(test_m, 3),
+            "Diferencial vs AR (%)": round(diff_ar, 3),
+            "Supera a AR": "✅ Sí" if diff_ar > 0 else "No",
+            "Win Rate (Test %)": round(test_wr, 1),
+            "Sharpe (Test)": round(test_sh, 2),
+            "Retorno Medio (Train %)": round(train_m, 3)
+        })
+    return discovered, evaluated_count
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio, max_r, only_rs, ar_mean_ref):
@@ -331,7 +369,7 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
         if only_rs and not is_rs:
             continue
 
-        if res["train_metrics"]["mean_pct"] > 0:
+        if res["test_metrics"]["mean_pct"] > 0:
             weights_str = ", ".join([f"{f} ({val:+.2f})" for f, val in zip(combo_list, w)])
             pred_now = res["live_pred_pct"]
             diff_vs_ar = res["test_metrics"]["mean_pct"] - ar_mean_ref
@@ -365,11 +403,11 @@ with tab_discovery:
     st.subheader(f"🌍 Descubridor Universal de Candidatos para `{target_ticker}`")
     st.markdown(
         f"¿No sabes qué activos predicen mejor a **`{target_ticker}`**? Este motor rastrea un **Catálogo Maestro de ~50 activos líderes mundiales** "
-        f"(Índices, los 11 Sectores de Wall Street, Bonos/Macro, Materias Primas, Forex, Mega-Caps y Cripto) para descubrir cuáles tienen mayor poder predictivo individual."
+        f"alineados exactamente al calendario de `{target_ticker}` para descubrir cuáles tienen mayor poder predictivo individual."
     )
 
     all_categories = list(dict.fromkeys([info[1] for info in MASTER_UNIVERSE.values()]))
-    col_d1, col_d2, col_d3 = st.columns([1.8, 1, 1])
+    col_d1, col_d2, col_d3, col_d4 = st.columns([1.6, 1, 1, 1])
 
     selected_cats = col_d1.multiselect(
         "Categorías del Universo Maestro a rastrear:",
@@ -378,33 +416,39 @@ with tab_discovery:
     )
     top_n_to_send = col_d2.slider("Nº de mejores candidatos a seleccionar:", min_value=4, max_value=15, value=8)
     discovery_sort = col_d3.selectbox(
-        "Ordenar candidatos descubiertos por:",
+        "Ordenar candidatos por:",
         ["Sharpe (Test)", "Retorno Medio Trade (Test %)", "Win Rate (Test %)"],
         index=0
     )
+    only_positive_test = col_d4.checkbox("Solo Test > 0%", value=True)
 
     if st.button(f"🚀 Rastrear el Mercado Mundial para `{target_ticker}`", type="primary"):
-        with st.spinner(f"Analizando más de 50 activos globales frente a `{target_ticker}`..."):
-            st.session_state.discovery_results = run_universal_discovery(
-                target_ticker, years_back, horizon, train_pct, selected_cats
+        with st.spinner(f"Descargando bloques seguros y evaluando ~50 activos globales frente a `{target_ticker}`..."):
+            disc_res, eval_cnt = run_universal_discovery(
+                target_ticker, years_back, horizon, train_pct, selected_cats, only_positive_test
             )
+            st.session_state.discovery_results = disc_res
+            st.session_state.discovery_eval_cnt = eval_cnt
             st.session_state.discovery_target = target_ticker
 
     if "discovery_results" in st.session_state and st.session_state.get("discovery_target") == target_ticker:
         disc_list = st.session_state.discovery_results
+        eval_cnt = st.session_state.get("discovery_eval_cnt", 0)
+
         if not disc_list:
-            st.warning("No se encontraron candidatos con expectativa positiva en las categorías seleccionadas.")
+            st.warning(f"Se descargaron {eval_cnt} activos pero ninguno superó el filtro. Desmarca la casilla 'Solo Test > 0%' o cambia el horizonte.")
         else:
             disc_df = pd.DataFrame(disc_list).sort_values(by=discovery_sort, ascending=False).reset_index(drop=True)
             top_tickers_list = disc_df["Ticker"].head(top_n_to_send).tolist()
             top_tickers_str = ", ".join(top_tickers_list)
 
             st.success(
-                f"✅ **¡Rastreo completado!** Se han encontrado **{len(disc_df)} activos** con ventaja estadística real (Train > 0 y Test > 0) para predecir a `{target_ticker}`."
+                f"✅ **¡Rastreo completado con éxito!** ({eval_cnt} activos globales descargados y alineados al calendario de `{target_ticker}`). "
+                f"Mostrando **{len(disc_df)} candidatos** ordenados por **{discovery_sort}**:"
             )
             st.dataframe(disc_df, use_container_width=True, hide_index=True)
 
-            st.markdown("#### 🎯 Tus Mejores Candidatos Descubiertos (Listos para la Pestaña 2)")
+            st.markdown(f"#### 🎯 Top {len(top_tickers_list)} Mejores Candidatos Descubiertos (Listos para enviar a la Pestaña 2)")
             st.code(top_tickers_str, language="text")
 
             def send_to_scanner_callback(tickers_string):
@@ -417,8 +461,8 @@ with tab_discovery:
                 type="secondary"
             )
             st.caption(
-                "💡 Al pulsar el botón de arriba (o copiando y pegando los que más te gusten en la caja de la barra lateral izquierda), "
-                "pasa directamente a la **Pestaña 2 (🔍 Escáner de Combinaciones)**."
+                "💡 Al pulsar el botón de arriba verás cómo se actualiza automáticamente la caja de la barra lateral izquierda. "
+                "Luego haz clic en la **Pestaña 2 (🔍 Escáner de Combinaciones)**."
             )
     else:
         st.info(
@@ -431,7 +475,7 @@ with tab_discovery:
 # =========================================================
 with tab_scanner:
     st.subheader(f"🔍 Escáner de Combinaciones (Radar de Parejas y Tríos) para `{target_ticker}`")
-    
+
     if not valid_candidates:
         st.warning("👈 Añade candidatos en la barra lateral izquierda o usa la Pestaña 1 (Descubridor Universal) para rellenarlos automáticamente.")
         selected_for_tab3 = []
@@ -511,11 +555,7 @@ with tab_models:
         st.warning("👈 Selecciona al menos una combinación en la Pestaña 2 para auditar los modelos.")
         st.stop()
 
-    # Calcular los 3 modelos simultáneamente
-    # Modelo 1: Base Autorregresivo (Solo Target) -> ar_res
-    # Modelo 2: Retornos Cruzados Puros (Solo Predictores Externos)
     dl_res = evaluate_strategy(returns_df, target_ticker, selected_for_tab3, horizon, train_pct)
-    # Modelo 3: Mixto ARDL (Target + Predictores Externos)
     ardl_features = [target_ticker] + selected_for_tab3
     ardl_res = evaluate_strategy(returns_df, target_ticker, ardl_features, horizon, train_pct)
 
