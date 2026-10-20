@@ -18,7 +18,8 @@ st.set_page_config(
 st.title("📈 Analizador Cuantitativo de Retornos Cruzados y Fuerza Relativa")
 st.markdown(
     "Flujo profesional en **3 Pasos**: **1º Descubridor Universal** (encuentra qué activos mueven a tu objetivo), "
-    "**2º Escáner de Combinaciones** (crea las mejores parejas/tríos sin clones) y **3º Auditoría de los 3 Modelos** (señal, niveles en precio y diagnóstico final)."
+    "**2º Escáner de Combinaciones** (crea las mejores parejas/tríos con Z-Score y filtro de clones) y "
+    "**3º Auditoría de los 3 Modelos** (señal, Z-Score de convicción, Régimen SMA 200, Kelly y diagnóstico final)."
 )
 
 # ---------------------------------------------------------
@@ -152,7 +153,7 @@ candidate_tickers = [
     if t.strip() and t.strip().upper() != target_ticker
 ]
 
-st.sidebar.header("⏱️ 2. Parámetros Estadísticos")
+st.sidebar.header("⏱️ 2. Parámetros y Entrenamiento")
 
 horizon = st.sidebar.slider(
     "Horizonte de Retorno / Predicción (Días):",
@@ -171,7 +172,22 @@ train_pct = st.sidebar.slider(
     help="El primer X% de las fechas entrena la fórmula; el % más reciente valida si funciona hoy (Out-of-Sample)."
 )
 
-st.sidebar.header("🛡️ 3. Costes Reales y Filtro Operativo")
+training_mode = st.sidebar.radio(
+    "🧠 Modo de Aprendizaje del Modelo:",
+    options=["Estático (Clásico Train/Test)", "Ventana Móvil Adaptativa (Rolling)"],
+    index=0,
+    help="Estático congela los pesos aprendidos en Train. Ventana Móvil re-entrena el modelo periódicamente con los últimos N días para adaptarse al mercado actual."
+)
+
+rolling_window_days = 252
+if training_mode == "Ventana Móvil Adaptativa (Rolling)":
+    rolling_window_days = st.sidebar.slider(
+        "Tamaño de Ventana Móvil (Días bursátiles):",
+        min_value=90, max_value=504, value=252, step=21,
+        help="252 días equivale a 1 año bursátil completo de memoria móvil."
+    )
+
+st.sidebar.header("🛡️ 3. Costes, Umbral y Régimen")
 
 commission_pct = st.sidebar.number_input(
     "Comisión + Spread medio por operación (%):",
@@ -183,6 +199,16 @@ min_threshold_pct = st.sidebar.number_input(
     "Umbral mínimo de predicción para operar (%):",
     min_value=0.00, max_value=10.00, value=0.10, step=0.05, format="%.2f",
     help="Escribe el número mínimo de retorno esperado para abrir trade (ej. 0.10%). Si la predicción es menor, el modelo se queda en liquidez (NEUTRAL)."
+)
+
+regime_filter_mode = st.sidebar.selectbox(
+    "Filtro de Régimen Macro (SMA 200 de X):",
+    options=[
+        "Desactivado (Operar Long y Short libremente)",
+        "Solo operar a favor de la SMA 200 (Tendencia Mayor)"
+    ],
+    index=0,
+    help="Si lo activas, el backtest solo abrirá LONG cuando el activo X esté por encima de su media de 200 días y solo abrirá SHORT cuando esté por debajo."
 )
 
 # ---------------------------------------------------------
@@ -236,31 +262,85 @@ def load_aligned_market_data(target_sym, candidate_syms, years):
     master_df = master_df.ffill().dropna()
     return master_df
 
-def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_ratio, fee_pct=0.05, threshold_pct=0.10):
+def evaluate_strategy(
+    df_returns, df_closes, target_col, feature_cols, horizon_days, train_ratio,
+    fee_pct=0.05, threshold_pct=0.10, is_rolling=False, roll_win=252, use_sma200_filter=False
+):
     df = pd.DataFrame(index=df_returns.index)
     df["Target_Future"] = df_returns[target_col].shift(-horizon_days)
 
     for col in feature_cols:
         df[col] = df_returns[col]
 
-    latest_features = df_returns[feature_cols].iloc[-1:]
+    # Calcular Régimen SMA 200 del activo objetivo X
+    sma200_series = df_closes[target_col].rolling(200, min_periods=50).mean()
+    above_sma200 = (df_closes[target_col] >= sma200_series).reindex(df_returns.index).fillna(True)
+
+    # Calcular Z-Score actual de cada predictor (desviaciones estándar respecto a su media histórica)
+    latest_features_series = df_returns[feature_cols].iloc[-1]
+    feat_means = df_returns[feature_cols].mean()
+    feat_stds = df_returns[feature_cols].std().replace(0, 1e-9)
+    latest_feature_zscores = ((latest_features_series - feat_means) / feat_stds).to_dict()
 
     df_model = df.dropna().copy()
     split_idx = int(len(df_model) * (train_ratio / 100.0))
 
-    train_df = df_model.iloc[:split_idx]
-    X_train = train_df[feature_cols].values
-    y_train = train_df["Target_Future"].values
     X_all = df_model[feature_cols].values
+    y_all = df_model["Target_Future"].values
+    n_samples = len(df_model)
 
-    model = LinearRegression()
-    model.fit(X_train, y_train)
-    weights = model.coef_.copy()
-    intercept = float(model.intercept_)
+    # Entrenamiento Estático vs. Ventana Móvil Adaptativa (Rolling Walk-Forward)
+    if not is_rolling:
+        X_train = X_all[:split_idx]
+        y_train = y_all[:split_idx]
+        model = LinearRegression()
+        model.fit(X_train, y_train)
+        weights = model.coef_.copy()
+        intercept = float(model.intercept_)
+        preds = intercept + X_all.dot(weights)
+        live_pred = float(intercept + latest_features_series.values.dot(weights))
+    else:
+        # Modelo inicial en el tramo Train
+        X_train_init = X_all[:split_idx]
+        y_train_init = y_all[:split_idx]
+        base_model = LinearRegression()
+        base_model.fit(X_train_init, y_train_init)
+        preds = np.zeros(n_samples)
+        preds[:split_idx] = base_model.intercept_ + X_train_init.dot(base_model.coef_)
 
-    df_model["Pred"] = intercept + X_all.dot(weights)
+        # En el tramo Test (Out-of-Sample), re-entrenar en bloques de 10 sesiones usando los últimos 'roll_win' días
+        # dejando siempre un margen de seguridad de 'horizon_days' para no tener fuga de datos futuros
+        step_retrain = 10
+        curr_w = base_model.coef_.copy()
+        curr_b = float(base_model.intercept_)
 
-    # Aplicar Umbral Mínimo (Zona Muerta) y descontar Comisión/Spread cuando hay operación activa
+        for t in range(split_idx, n_samples, step_retrain):
+            train_end = max(30, t - horizon_days)
+            train_start = max(0, train_end - roll_win)
+            if train_end - train_start >= 25:
+                m_roll = LinearRegression()
+                m_roll.fit(X_all[train_start:train_end], y_all[train_start:train_end])
+                curr_w = m_roll.coef_.copy()
+                curr_b = float(m_roll.intercept_)
+            end_block = min(t + step_retrain, n_samples)
+            preds[t:end_block] = curr_b + X_all[t:end_block].dot(curr_w)
+
+        # Ajuste final con la ventana móvil más reciente disponible hoy para la predicción en vivo
+        final_start = max(0, n_samples - roll_win)
+        m_live = LinearRegression()
+        m_live.fit(X_all[final_start:], y_all[final_start:])
+        weights = m_live.coef_.copy()
+        intercept = float(m_live.intercept_)
+        live_pred = float(intercept + latest_features_series.values.dot(weights))
+
+    df_model["Pred"] = preds
+
+    # Calcular el Z-Score de Convicción de la Señal de Hoy comparada con el historial de predicciones
+    pred_mean = float(np.mean(preds[:split_idx]))
+    pred_std = float(np.std(preds[:split_idx]))
+    signal_zscore = (live_pred - pred_mean) / pred_std if pred_std > 1e-9 else 0.0
+
+    # Aplicar Umbral Mínimo y Filtro opcional de Régimen SMA 200
     thresh_dec = threshold_pct / 100.0
     fee_dec = fee_pct / 100.0
 
@@ -268,6 +348,12 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
         df_model["Pred"] > thresh_dec, 1.0,
         np.where(df_model["Pred"] < -thresh_dec, -1.0, 0.0)
     )
+
+    if use_sma200_filter:
+        bull_mask = above_sma200.loc[df_model.index].values
+        signals = np.where((signals > 0) & (~bull_mask), 0.0, signals)
+        signals = np.where((signals < 0) & bull_mask, 0.0, signals)
+
     df_model["Signal"] = signals
 
     active_mask = np.abs(signals) > 0
@@ -281,13 +367,15 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
     train_active = train_strat[df_model["Signal"].iloc[:split_idx] != 0]
     test_active = test_strat[df_model["Signal"].iloc[split_idx:] != 0]
 
-    # Termómetro Reciente (Últimas 60 barras hábiles ~ 90 días naturales)
     recent_strat = test_strat.iloc[-60:] if len(test_strat) >= 10 else test_strat
     recent_active = recent_strat[recent_strat != 0]
 
     def get_metrics(full_series, active_series):
         if len(full_series) == 0 or len(active_series) == 0:
-            return {"mean_pct": 0.0, "win_rate": 0.0, "sharpe": 0.0, "total_pnl": 0.0, "max_dd": 0.0, "trades_pct": 0.0}
+            return {
+                "mean_pct": 0.0, "win_rate": 0.0, "sharpe": 0.0,
+                "total_pnl": 0.0, "max_dd": 0.0, "trades_pct": 0.0, "half_kelly_pct": 0.0
+            }
         mean_ret = float(active_series.mean() * 100.0)
         win_rate = float((active_series > 0).mean() * 100.0)
         std_ret = float(full_series.std())
@@ -298,16 +386,30 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
         max_dd = float(np.min(dd)) if len(dd) > 0 else 0.0
         total_pnl = float(eq.iloc[-1]) if len(eq) > 0 else 0.0
         trades_pct = float((len(active_series) / len(full_series)) * 100.0)
+
+        # Cálculo del Criterio de Kelly Fraccionado (Half-Kelly para gestión prudente de capital)
+        wins = active_series[active_series > 0]
+        losses = active_series[active_series < 0]
+        if len(wins) > 0 and len(losses) > 0:
+            w_prob = len(wins) / len(active_series)
+            payoff_ratio = float(wins.mean() / abs(losses.mean()))
+            full_kelly = w_prob - ((1.0 - w_prob) / payoff_ratio) if payoff_ratio > 0 else 0.0
+            half_kelly = max(0.0, min(full_kelly * 0.5, 0.50)) * 100.0
+        elif len(wins) > 0:
+            half_kelly = 25.0
+        else:
+            half_kelly = 0.0
+
         return {
             "mean_pct": mean_ret,
             "win_rate": win_rate,
             "sharpe": sharpe,
             "total_pnl": total_pnl,
             "max_dd": max_dd,
-            "trades_pct": trades_pct
+            "trades_pct": trades_pct,
+            "half_kelly_pct": half_kelly
         }
 
-    live_pred = float(intercept + latest_features.values.dot(weights)[0])
     target_vol_pct = float(df_returns[target_col].iloc[split_idx:].std() * 100.0)
 
     return {
@@ -320,7 +422,9 @@ def evaluate_strategy(df_returns, target_col, feature_cols, horizon_days, train_
         "df_model": df_model,
         "split_date": df_model.index[split_idx],
         "live_pred_pct": live_pred * 100.0,
-        "latest_features": latest_features.iloc[0] * 100.0,
+        "signal_zscore": signal_zscore,
+        "latest_features": latest_features_series * 100.0,
+        "latest_feature_zscores": latest_feature_zscores,
         "target_vol_pct": target_vol_pct
     }
 
@@ -344,8 +448,19 @@ if len(closes_df) < horizon * 10:
 returns_df = closes_df.pct_change(horizon).dropna()
 current_target_price = float(closes_df[target_ticker].iloc[-1])
 
-# Evaluación del Modelo 1 Base (AR) con costes y umbral aplicados
-ar_res = evaluate_strategy(returns_df, target_ticker, [target_ticker], horizon, train_pct, commission_pct, min_threshold_pct)
+# Estado actual del Régimen Macro (SMA 200) del activo objetivo X
+sma200_val = float(closes_df[target_ticker].rolling(200, min_periods=50).mean().iloc[-1])
+is_bull_regime = current_target_price >= sma200_val
+sma200_dist_pct = ((current_target_price / sma200_val) - 1.0) * 100.0
+
+is_rolling_mode = (training_mode == "Ventana Móvil Adaptativa (Rolling)")
+use_sma_filter = (regime_filter_mode != "Desactivado (Operar Long y Short libremente)")
+
+# Evaluación del Modelo 1 Base (AR)
+ar_res = evaluate_strategy(
+    returns_df, closes_df, target_ticker, [target_ticker], horizon, train_pct,
+    commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
+)
 ar_test_mean = ar_res["test_metrics"]["mean_pct"]
 ar_test_wr = ar_res["test_metrics"]["win_rate"]
 ar_test_sharpe = ar_res["test_metrics"]["sharpe"]
@@ -355,7 +470,7 @@ ar_test_dd = ar_res["test_metrics"]["max_dd"]
 # FUNCIONES DE CACHÉ PARA PESTAÑA 1 Y PESTAÑA 2
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
-def run_universal_discovery(target, years, horizon_days, train_ratio, categories_selected, only_pos_test, fee_pct, thresh_pct):
+def run_universal_discovery(target, years, horizon_days, train_ratio, categories_selected, only_pos_test, fee_pct, thresh_pct, is_roll, roll_w, sma_flt):
     universe_tickers = [
         t for t, info in MASTER_UNIVERSE.items()
         if info[1] in categories_selected and t != target
@@ -365,7 +480,7 @@ def run_universal_discovery(target, years, horizon_days, train_ratio, categories
         return [], 0
 
     df_rets = df_closes.pct_change(horizon_days).dropna()
-    ar_base = evaluate_strategy(df_rets, target, [target], horizon_days, train_ratio, fee_pct, thresh_pct)
+    ar_base = evaluate_strategy(df_rets, df_closes, target, [target], horizon_days, train_ratio, fee_pct, thresh_pct, is_roll, roll_w, sma_flt)
     ar_ref_mean = ar_base["test_metrics"]["mean_pct"]
 
     discovered = []
@@ -375,7 +490,7 @@ def run_universal_discovery(target, years, horizon_days, train_ratio, categories
         if cand not in df_rets.columns:
             continue
         evaluated_count += 1
-        res = evaluate_strategy(df_rets, target, [cand], horizon_days, train_ratio, fee_pct, thresh_pct)
+        res = evaluate_strategy(df_rets, df_closes, target, [cand], horizon_days, train_ratio, fee_pct, thresh_pct, is_roll, roll_w, sma_flt)
         w = float(res["weights"][0])
         train_m = res["train_metrics"]["mean_pct"]
         test_m = res["test_metrics"]["mean_pct"]
@@ -383,6 +498,7 @@ def run_universal_discovery(target, years, horizon_days, train_ratio, categories
         test_sh = res["test_metrics"]["sharpe"]
         test_dd = res["test_metrics"]["max_dd"]
         diff_ar = test_m - ar_ref_mean
+        cand_z = res["latest_feature_zscores"].get(cand, 0.0)
 
         if only_pos_test and test_m <= 0:
             continue
@@ -394,6 +510,7 @@ def run_universal_discovery(target, years, horizon_days, train_ratio, categories
             "Categoría": cat_name,
             "Relación Aprendida": "📈 Tendencia (+)" if w > 0 else "🔄 Reversión (-)",
             "Peso (w)": round(w, 4),
+            "Z-Score Hoy (σ)": round(cand_z, 2),
             "Retorno Neto Trade (Test %)": round(test_m, 3),
             "Diferencial vs AR (%)": round(diff_ar, 3),
             "Supera a AR": "✅ Sí" if diff_ar > 0 else "No",
@@ -405,7 +522,7 @@ def run_universal_discovery(target, years, horizon_days, train_ratio, categories
     return discovered, evaluated_count
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio, max_r, only_rs, filter_clones, ar_mean_ref, fee_pct, thresh_pct):
+def run_full_scanner(returns_data, closes_data, target, candidates, horizon_days, train_ratio, max_r, only_rs, filter_clones, ar_mean_ref, fee_pct, thresh_pct, is_roll, roll_w, sma_flt):
     combos = []
     for r in range(1, max_r + 1):
         combos.extend(list(combinations(candidates, r)))
@@ -418,7 +535,6 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
     for combo in combos:
         combo_list = list(combo)
 
-        # Filtro automático de Clones (Correlación > 0.90 entre predictores de la misma cesta)
         if filter_clones and len(combo_list) >= 2:
             is_clone = False
             for a, b in combinations(combo_list, 2):
@@ -429,7 +545,7 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
                 clones_filtered += 1
                 continue
 
-        res = evaluate_strategy(returns_data, target, combo_list, horizon_days, train_ratio, fee_pct, thresh_pct)
+        res = evaluate_strategy(returns_data, closes_data, target, combo_list, horizon_days, train_ratio, fee_pct, thresh_pct, is_roll, roll_w, sma_flt)
         w = res["weights"]
         is_rs = (any(val > 0 for val in w) and any(val < 0 for val in w))
 
@@ -439,6 +555,7 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
         if res["test_metrics"]["mean_pct"] > 0:
             weights_str = ", ".join([f"{f} ({val:+.2f})" for f, val in zip(combo_list, w)])
             pred_now = res["live_pred_pct"]
+            sig_z = res["signal_zscore"]
             diff_vs_ar = res["test_metrics"]["mean_pct"] - ar_mean_ref
 
             if pred_now > thresh_pct:
@@ -459,6 +576,7 @@ def run_full_scanner(returns_data, target, candidates, horizon_days, train_ratio
                 "Sharpe (Test)": round(res["test_metrics"]["sharpe"], 2),
                 "Max Drawdown (Test %)": round(res["test_metrics"]["max_dd"], 2),
                 "Win Rate 90d (%)": round(res["recent_metrics"]["win_rate"], 1),
+                "Z-Score Señal Hoy (σ)": round(sig_z, 2),
                 f"Señal Hoy ({horizon_days}d)": sig_str
             })
     return rows, len(combos), clones_filtered
@@ -478,8 +596,8 @@ tab_discovery, tab_scanner, tab_models = st.tabs([
 with tab_discovery:
     st.subheader(f"🌍 Descubridor Universal de Candidatos para `{target_ticker}`")
     st.markdown(
-        f"¿No sabes qué activos predicen mejor a **`{target_ticker}`**? Este motor rastrea un **Catálogo Maestro de ~50 activos líderes mundiales** "
-        f"descontando una comisión de **`{commission_pct:.2f}%`** y exigiendo un umbral mínimo de **`{min_threshold_pct:.2f}%`**."
+        f"Rastrea un **Catálogo Maestro de ~50 activos líderes mundiales** en modo **{training_mode}**, "
+        f"descontando **`{commission_pct:.2f}%`** de comisión y exigiendo un umbral de **`{min_threshold_pct:.2f}%`**."
     )
 
     all_categories = list(dict.fromkeys([info[1] for info in MASTER_UNIVERSE.values()]))
@@ -501,7 +619,8 @@ with tab_discovery:
     if st.button(f"🚀 Rastrear el Mercado Mundial para `{target_ticker}`", type="primary"):
         with st.spinner(f"Descargando bloques seguros y evaluando ~50 activos globales frente a `{target_ticker}`..."):
             disc_res, eval_cnt = run_universal_discovery(
-                target_ticker, years_back, horizon, train_pct, selected_cats, only_positive_test, commission_pct, min_threshold_pct
+                target_ticker, years_back, horizon, train_pct, selected_cats, only_positive_test,
+                commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
             )
             st.session_state.discovery_results = disc_res
             st.session_state.discovery_eval_cnt = eval_cnt
@@ -524,7 +643,6 @@ with tab_discovery:
             )
             st.dataframe(disc_df, use_container_width=True, hide_index=True)
 
-            # Botón de descarga Excel para Pestaña 1
             excel_p1 = convert_dfs_to_excel({f"Descubridor_{target_ticker}": disc_df})
             st.download_button(
                 label=f"📥 Descargar Tabla del Descubridor en Excel (.xlsx)",
@@ -562,7 +680,7 @@ with tab_scanner:
         selected_for_tab3 = []
     else:
         st.markdown(
-            f"**Candidatos activos analizados ({len(valid_candidates)}):** `{', '.join(valid_candidates)}`  \n"
+            f"**Candidatos activos analizados ({len(valid_candidates)}):** `{', '.join(valid_candidates)}` | **Modo:** `{training_mode}`  \n"
             f"**Referencia a batir (Modelo 1 Base AR - Solo `{target_ticker}` en Test Neto):** "
             f"Retorno Neto: **`{ar_test_mean:+.2f}%`** | Win Rate: **`{ar_test_wr:.1f}%`** | Sharpe: **`{ar_test_sharpe:.2f}`** | Max DD: **`{ar_test_dd:.2f}%`**"
         )
@@ -586,9 +704,9 @@ with tab_scanner:
         )
 
         scanner_rows, total_evaluated, clones_removed = run_full_scanner(
-            returns_df, target_ticker, valid_candidates, horizon, train_pct,
+            returns_df, closes_df, target_ticker, valid_candidates, horizon, train_pct,
             max_combo_size, only_relative_strength, filter_clones_chk, ar_test_mean,
-            commission_pct, min_threshold_pct
+            commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
         )
 
         if not scanner_rows:
@@ -601,13 +719,12 @@ with tab_scanner:
             clone_msg = f" ({clones_removed} combinaciones clónicas descartadas por correlación > 90%)" if clones_removed > 0 else ""
             st.success(
                 f"✅ **{total_evaluated} combinaciones evaluadas al instante{clone_msg}.** "
-                f"Aquí tienes el **Top 15 Out-of-Sample** (neto de comisiones) ordenado por **{sort_criterion}**:"
+                f"Aquí tienes el **Top 15 Out-of-Sample** (con Z-Score de señal y neto de comisiones) ordenado por **{sort_criterion}**:"
             )
 
             display_cols = [c for c in scanner_df.columns if c != "combo_list"]
             st.dataframe(scanner_df[display_cols], use_container_width=True, hide_index=True)
 
-            # Botón de descarga Excel para Pestaña 2 (incluye todas las combinaciones válidas ordenadas)
             excel_p2 = convert_dfs_to_excel({f"Escaner_{target_ticker}": full_scanner_df[display_cols]})
             st.download_button(
                 label=f"📥 Descargar Ranking Completo del Escáner en Excel (.xlsx)",
@@ -620,7 +737,7 @@ with tab_scanner:
             st.markdown("### 🎯 Puente Directo a la Auditoría Final (Pestaña 3)")
 
             combo_options = [
-                f"#{i+1}: {row['Activos Predictores']}  —  [Sharpe: {row['Sharpe (Test)']} | Win Rate: {row['Win Rate (Test %)']}% | Neto Test: {row['Retorno Neto Trade (Test %)']:+.2f}% | Max DD: {row['Max Drawdown (Test %)']:.1f}%]"
+                f"#{i+1}: {row['Activos Predictores']}  —  [Sharpe: {row['Sharpe (Test)']} | Win Rate: {row['Win Rate (Test %)']}% | Neto Test: {row['Retorno Neto Trade (Test %)']:+.2f}% | Z-Score Hoy: {row['Z-Score Señal Hoy (σ)']:+.2f}σ]"
                 for i, row in scanner_df.iterrows()
             ]
             combo_options.append("🛠️ Selección Manual Personalizada")
@@ -642,7 +759,7 @@ with tab_scanner:
                 selected_for_tab3 = scanner_df.iloc[chosen_idx]["combo_list"]
                 st.info(
                     f"👉 Tienes seleccionada la combinación ganadora **`{' + '.join(selected_for_tab3)}`**. "
-                    f"Pasa a la **Pestaña 3 (📊 Auditoría de los 3 Modelos)** para ver el combate cara a cara, los niveles en precio y la conclusión operativa."
+                    f"Pasa a la **Pestaña 3 (📊 Auditoría de los 3 Modelos)** para ver el combate cara a cara, Z-Score, Kelly y la conclusión operativa."
                 )
 
 # =========================================================
@@ -653,9 +770,15 @@ with tab_models:
         st.warning("👈 Selecciona al menos una combinación en la Pestaña 2 para auditar los modelos.")
         st.stop()
 
-    dl_res = evaluate_strategy(returns_df, target_ticker, selected_for_tab3, horizon, train_pct, commission_pct, min_threshold_pct)
+    dl_res = evaluate_strategy(
+        returns_df, closes_df, target_ticker, selected_for_tab3, horizon, train_pct,
+        commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
+    )
     ardl_features = [target_ticker] + selected_for_tab3
-    ardl_res = evaluate_strategy(returns_df, target_ticker, ardl_features, horizon, train_pct, commission_pct, min_threshold_pct)
+    ardl_res = evaluate_strategy(
+        returns_df, closes_df, target_ticker, ardl_features, horizon, train_pct,
+        commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
+    )
 
     models_summary = [
         {"id": 1, "name": f"Modelo 1: Base AR (Solo {target_ticker})", "res": ar_res},
@@ -665,9 +788,9 @@ with tab_models:
     best_model = max(models_summary, key=lambda x: x["res"]["test_metrics"]["mean_pct"])
 
     # ---------------------------------------------------------
-    # BLOQUE SUPERIOR: CONSENSO EN VIVO Y NIVELES EN PRECIO
+    # BLOQUE SUPERIOR: CONSENSO, Z-SCORE, RÉGIMEN SMA 200 Y KELLY
     # ---------------------------------------------------------
-    st.subheader(f"🚦 Consenso Operativo y Niveles en Precio para `{target_ticker}` (Próximos {horizon} días)")
+    st.subheader(f"🚦 Consenso Operativo, Z-Score y Gestión de Capital para `{target_ticker}` ({horizon} días)")
 
     preds = [m["res"]["live_pred_pct"] for m in models_summary]
     long_votes = sum(1 for p in preds if p > min_threshold_pct)
@@ -685,45 +808,67 @@ with tab_models:
         consensus_banner = f"⚪ EN LIQUIDEZ / DIVIDIDO (Umbral {min_threshold_pct:.2f}%)"
 
     best_pred = best_model["res"]["live_pred_pct"]
+    best_z = best_model["res"]["signal_zscore"]
     best_vol = best_model["res"]["target_vol_pct"]
+    best_kelly = best_model["res"]["test_metrics"]["half_kelly_pct"]
+
+    if abs(best_z) >= 2.0:
+        z_badge = f"🔥 EXTREMA ({best_z:+.2f}σ)"
+        z_mult = 1.25
+    elif abs(best_z) >= 1.0:
+        z_badge = f"⚡ FUERTE ({best_z:+.2f}σ)"
+        z_mult = 1.0
+    else:
+        z_badge = f"〰️ MODERADA ({best_z:+.2f}σ)"
+        z_mult = 0.65
 
     if best_pred > min_threshold_pct:
         best_dir = "🟢 LONG / COMPRAR"
         target_price = current_target_price * (1.0 + (best_pred / 100.0))
         stop_price = current_target_price * (1.0 - (best_vol / 100.0))
+        suggested_pos_pct = min(50.0, best_kelly * z_mult)
     elif best_pred < -min_threshold_pct:
         best_dir = "🔴 SHORT / VENDER"
         target_price = current_target_price * (1.0 + (best_pred / 100.0))
         stop_price = current_target_price * (1.0 + (best_vol / 100.0))
+        suggested_pos_pct = min(50.0, best_kelly * z_mult)
     else:
-        best_dir = "⚪ NEUTRAL (No supera umbral)"
+        best_dir = "⚪ NEUTRAL (En Liquidez)"
         target_price = current_target_price * (1.0 + (best_pred / 100.0))
         stop_price = current_target_price
+        suggested_pos_pct = 0.0
 
+    # Alerta si la señal va en contra de la tendencia mayor SMA 200
+    regime_label = f"🐂 ALCISTA (> SMA 200 en {sma200_dist_pct:+.1f}%)" if is_bull_regime else f"🐻 BAJISTA (< SMA 200 en {sma200_dist_pct:+.1f}%)"
+
+    # Fila 1 de Métricas: Consenso, Ganador, Señal y Convicción Z-Score
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Estado de Consenso (3 Modelos)", consensus_banner)
     c2.metric("⭐ Modelo Ganador (Out-of-Sample)", f"Modelo {best_model['id']}")
     c3.metric(f"Señal del Ganador ({horizon}d)", f"{best_dir} ({best_pred:+.2f}%)")
-    c4.metric(
-        "Termómetro Reciente (Últimos 90 días)",
-        f"Win Rate: {best_model['res']['recent_metrics']['win_rate']:.1f}%",
-        delta=f"Global Test: {best_model['res']['test_metrics']['win_rate']:.1f}%"
-    )
+    c4.metric("Z-Score de la Señal Hoy", z_badge, delta=f"Win Rate 90d: {best_model['res']['recent_metrics']['win_rate']:.1f}%")
 
-    # Tarjeta de Niveles de Precio Reales (Take Profit Proyectado y Stop Estadístico)
+    # Fila 2 de Métricas: Niveles en Precio, Stop Estadístico, Régimen SMA 200 y Tamaño Kelly
     p1, p2, p3, p4 = st.columns(4)
-    p1.metric(f"Precio Actual `{target_ticker}`", f"{current_target_price:,.2f}")
+    p1.metric(f"Precio Actual `{target_ticker}`", f"{current_target_price:,.2f}", delta=regime_label, delta_color="normal" if is_bull_regime else "inverse")
     p2.metric(f"🎯 Precio Objetivo Proyectado ({horizon}d)", f"{target_price:,.2f}", delta=f"{best_pred:+.2f}%")
-    p3.metric(f"🛡️ Stop Loss Estadístico (1σ Volatilidad {horizon}d)", f"{stop_price:,.2f}", delta=f"±{best_vol:.2f}% rango normal", delta_color="off")
-    p4.metric("Max Drawdown del Ganador (Test)", f"{best_model['res']['test_metrics']['max_dd']:.2f}%")
+    p3.metric(f"🛡️ Stop Loss Estadístico (1σ = ±{best_vol:.2f}%)", f"{stop_price:,.2f}", delta=f"Max DD Test: {best_model['res']['test_metrics']['max_dd']:.2f}%", delta_color="off")
+    p4.metric("⚖️ Capital Sugerido (Half-Kelly Ajustado)", f"{suggested_pos_pct:.1f}% de Cartera", delta=f"Kelly Base Test: {best_kelly:.1f}%", delta_color="off")
 
-    st.markdown("#### 🏆 Tabla Comparativa Cara a Cara (Neto de Comisiones y Filtrado por Umbral)")
+    if (best_pred < -min_threshold_pct and is_bull_regime) or (best_pred > min_threshold_pct and not is_bull_regime):
+        st.warning(
+            f"⚠️ **Nota de Régimen Macro (SMA 200):** La señal a {horizon} días (**{best_dir}**) va a contracorriente del Régimen Mayor de `{target_ticker}` "
+            f"(**{regime_label}**). Si operas contra la tendencia principal, considera reducir el tamaño de posición a la mitad o activar el filtro SMA 200 en la barra lateral."
+        )
+
+    st.markdown("#### 🏆 Tabla Comparativa Cara a Cara (Neto de Comisiones y con Z-Score en Vivo)")
     comp_rows = []
     for m in models_summary:
         r = m["res"]
         is_winner = (m["id"] == best_model["id"])
         diff_ar = r["test_metrics"]["mean_pct"] - ar_test_mean
         p_now = r["live_pred_pct"]
+        z_now = r["signal_zscore"]
         if p_now > min_threshold_pct:
             sig_today = f"🟢 LONG ({p_now:+.2f}%)"
         elif p_now < -min_threshold_pct:
@@ -741,22 +886,36 @@ with tab_models:
             "Win Rate Reciente (90d)": f"{r['recent_metrics']['win_rate']:.1f}%",
             "Sharpe Anualizado (Test)": f"{r['test_metrics']['sharpe']:.2f}",
             "Max Drawdown (Test)": f"{r['test_metrics']['max_dd']:.2f}%",
-            "PnL Neto Acumulado (Test)": f"{r['test_metrics']['total_pnl']:+.1f}%",
+            "Half-Kelly Sugerido": f"{r['test_metrics']['half_kelly_pct']:.1f}%",
+            "Z-Score Señal Hoy": f"{z_now:+.2f}σ",
             f"Señal Hoy ({horizon}d)": sig_today
         })
 
     comp_df = pd.DataFrame(comp_rows)
     st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-    # Preparar tablas de pesos de los 3 modelos para exportar todo junto en un único Excel multi-hoja
+    # Construcción de la tabla de radiografía con Z-Score de cada activo predictor
     def build_weights_df(res_obj):
-        return pd.DataFrame({
-            "Activo Predictor": res_obj["features"],
-            "Coeficiente (Peso w)": [round(w, 4) for w in res_obj["weights"]],
-            "Comportamiento": ["📈 Tendencia (Momentum)" if w > 0 else "🔄 Reversión a la Media" for w in res_obj["weights"]],
-            f"Retorno Actual ({horizon}d %)": [round(res_obj["latest_features"][f], 2) for f in res_obj["features"]],
-            "Aportación a Hoy (%)": [round(w * res_obj["latest_features"][f], 3) for w, f in zip(res_obj["weights"], res_obj["features"])]
-        })
+        rows_w = []
+        for f, w in zip(res_obj["features"], res_obj["weights"]):
+            curr_ret = float(res_obj["latest_features"][f])
+            z_val = float(res_obj["latest_feature_zscores"].get(f, 0.0))
+            if abs(z_val) >= 2.0:
+                z_state = f"🔥 Extremo ({z_val:+.2f}σ)"
+            elif abs(z_val) >= 1.2:
+                z_state = f"⚡ Estirado ({z_val:+.2f}σ)"
+            else:
+                z_state = f"Normal ({z_val:+.2f}σ)"
+
+            rows_w.append({
+                "Activo Predictor": f,
+                "Coeficiente (Peso w)": round(float(w), 4),
+                "Comportamiento": "📈 Tendencia (Momentum)" if w > 0 else "🔄 Reversión a la Media",
+                f"Retorno Actual ({horizon}d %)": round(curr_ret, 2),
+                "Z-Score Predictor Hoy": z_state,
+                "Aportación a Hoy (%)": round(float(w) * curr_ret, 3)
+            })
+        return pd.DataFrame(rows_w)
 
     excel_p3 = convert_dfs_to_excel({
         "Comparativa_3_Modelos": comp_df,
@@ -765,7 +924,7 @@ with tab_models:
         "Pesos_Modelo_3_ARDL": build_weights_df(ardl_res)
     })
     st.download_button(
-        label=f"📥 Descargar Auditoría Completa (3 Modelos + Pesos) en Excel (.xlsx)",
+        label=f"📥 Descargar Auditoría Completa (3 Modelos + Pesos + Z-Scores) en Excel (.xlsx)",
         data=excel_p3,
         file_name=f"Auditoria_3_Modelos_{target_ticker}_{horizon}d.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -802,7 +961,7 @@ with tab_models:
         showarrow=False, yshift=15, font=dict(color="#ef4444", size=12)
     )
     fig_eq.update_layout(
-        title=f"Curvas de Equidad Netas Comparadas (%) — Horizonte {horizon}d | Comisión {commission_pct:.2f}% | Umbral {min_threshold_pct:.2f}%",
+        title=f"Curvas de Equidad Netas (%) — Modo: {training_mode} | Horizonte {horizon}d | Comisión {commission_pct:.2f}%",
         xaxis_title="Fecha", yaxis_title="Retorno Neto Acumulado (%)",
         height=420, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
@@ -814,13 +973,13 @@ with tab_models:
     # FUNCIÓN AUXILIAR PARA PINTAR LA RADIOGRAFÍA DE CADA MODELO
     # ---------------------------------------------------------
     def render_model_radiography(res_obj):
-        col_t, col_g = st.columns([1.3, 1])
+        col_t, col_g = st.columns([1.35, 1])
         w_df = build_weights_df(res_obj)
         with col_t:
             st.dataframe(w_df, use_container_width=True, hide_index=True)
             st.caption(
                 f"**Sesgo base (Intercepto $b$):** `{res_obj['intercept']*100:+.3f}%`  |  "
-                f"**Predicción Hoy:** `{res_obj['live_pred_pct']:+.2f}%`  |  "
+                f"**Predicción Hoy:** `{res_obj['live_pred_pct']:+.2f}%` (**Z-Score: `{res_obj['signal_zscore']:+.2f}σ`**)  |  "
                 f"**Tiempo en Mercado (Test):** `{res_obj['test_metrics']['trades_pct']:.0f}%` de los días"
             )
         with col_g:
@@ -842,7 +1001,7 @@ with tab_models:
     # =========================================================
     st.subheader(f"1️⃣ Modelo 1: Base Autorregresivo (Solo `{target_ticker}` consigo mismo)")
     m1_c1, m1_c2, m1_c3, m1_c4 = st.columns(4)
-    m1_c1.metric(f"Predicción Hoy ({horizon}d)", f"{ar_res['live_pred_pct']:+.2f}%")
+    m1_c1.metric(f"Predicción Hoy ({horizon}d)", f"{ar_res['live_pred_pct']:+.2f}%", delta=f"Z-Score: {ar_res['signal_zscore']:+.2f}σ", delta_color="off")
     m1_c2.metric("Retorno Neto / Trade (Test)", f"{ar_test_mean:+.2f}%")
     m1_c3.metric("Win Rate Global / 90d (Test)", f"{ar_test_wr:.1f}%  |  {ar_res['recent_metrics']['win_rate']:.1f}%")
     m1_c4.metric("Sharpe / Max DD (Test)", f"{ar_test_sharpe:.2f}  |  {ar_test_dd:.1f}%")
@@ -877,7 +1036,7 @@ with tab_models:
 
     st.subheader(f"2️⃣ Modelo 2: Retornos Cruzados Puros (`{' + '.join(selected_for_tab3)}` sin `{target_ticker}`)")
     m2_c1, m2_c2, m2_c3, m2_c4 = st.columns(4)
-    m2_c1.metric(f"Predicción Hoy ({horizon}d)", f"{dl_res['live_pred_pct']:+.2f}%")
+    m2_c1.metric(f"Predicción Hoy ({horizon}d)", f"{dl_res['live_pred_pct']:+.2f}%", delta=f"Z-Score: {dl_res['signal_zscore']:+.2f}σ", delta_color="off")
     m2_c2.metric("Retorno Neto / Trade (Test)", f"{dl_mean:+.2f}%", delta=f"{dl_diff_ar:+.2f}% vs Modelo 1 (AR)")
     m2_c3.metric("Win Rate Global / 90d (Test)", f"{dl_wr:.1f}%  |  {dl_res['recent_metrics']['win_rate']:.1f}%", delta=f"{dl_wr - ar_test_wr:+.1f}% vs AR")
     m2_c4.metric("Sharpe / Max DD (Test)", f"{dl_sharpe:.2f}  |  {dl_dd:.1f}%", delta=f"{dl_sharpe - ar_test_sharpe:+.2f} Sharpe vs AR")
@@ -891,7 +1050,8 @@ with tab_models:
         st.success(
             f"✅ **Conclusión Final del Modelo 2 (APROBADO — VENTAJA REAL):** Usar **`{' + '.join(selected_for_tab3)}`** "
             f"bate al activo en solitario por **`{dl_diff_ar:+.2f}%`** neto por operación en la prueba real, alcanzando un Win Rate del **`{dl_wr:.1f}%`** "
-            f"(**`{dl_res['recent_metrics']['win_rate']:.1f}%`** en los últimos 90 días), un Sharpe de **`{dl_sharpe:.2f}`** y un Max Drawdown de **`{dl_dd:.2f}%`**. {rs_text}"
+            f"(**`{dl_res['recent_metrics']['win_rate']:.1f}%`** en los últimos 90 días), un Sharpe de **`{dl_sharpe:.2f}`**, Max Drawdown de **`{dl_dd:.2f}%`** "
+            f"y un Z-Score de señal hoy de **`{dl_res['signal_zscore']:+.2f}σ`**. {rs_text}"
         )
     elif dl_mean > 0 and dl_diff_ar < 0:
         st.warning(
@@ -919,7 +1079,7 @@ with tab_models:
 
     st.subheader(f"3️⃣ Modelo 3: Mixto ARDL (`{target_ticker}` + `{' + '.join(selected_for_tab3)}`)")
     m3_c1, m3_c2, m3_c3, m3_c4 = st.columns(4)
-    m3_c1.metric(f"Predicción Hoy ({horizon}d)", f"{ardl_res['live_pred_pct']:+.2f}%")
+    m3_c1.metric(f"Predicción Hoy ({horizon}d)", f"{ardl_res['live_pred_pct']:+.2f}%", delta=f"Z-Score: {ardl_res['signal_zscore']:+.2f}σ", delta_color="off")
     m3_c2.metric("Retorno Neto / Trade (Test)", f"{ardl_mean:+.2f}%", delta=f"{ardl_diff_dl:+.2f}% vs Modelo 2 (Cruzado)")
     m3_c3.metric("Win Rate Global / 90d (Test)", f"{ardl_wr:.1f}%  |  {ardl_res['recent_metrics']['win_rate']:.1f}%", delta=f"{ardl_wr - dl_wr:+.1f}% vs Modelo 2")
     m3_c4.metric("Sharpe / Max DD (Test)", f"{ardl_sharpe:.2f}  |  {ardl_dd:.1f}%", delta=f"{ardl_sharpe - dl_sharpe:+.2f} Sharpe vs Modelo 2")
@@ -930,7 +1090,7 @@ with tab_models:
         st.success(
             f"✅ **Conclusión Final del Modelo 3 (SINERGIA PERFECTA — MEJOR OPCIÓN):** Añadir el propio `{target_ticker}` junto a "
             f"**`{' + '.join(selected_for_tab3)}`** mejora aún más al Modelo 2 en **`{ardl_diff_dl:+.2f}%`** por operación y supera al Modelo 1 Base en **`{ardl_diff_ar:+.2f}%`** "
-            f"(Max Drawdown: **`{ardl_dd:.2f}%`**). Ambos mundos se complementan sin estorbarse. Haz caso a la señal de este Modelo 3 (**{ardl_res['live_pred_pct']:+.2f}%**)."
+            f"(Max Drawdown: **`{ardl_dd:.2f}%`**, Z-Score Hoy: **`{ardl_res['signal_zscore']:+.2f}σ`**). Ambos mundos se complementan sin estorbarse."
         )
     elif ardl_mean < dl_mean:
         st.warning(
