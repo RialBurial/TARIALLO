@@ -15,71 +15,102 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("📈 Analizador Cuantitativo de Retornos Cruzados y Fuerza Relativa")
+st.title("📈 Suite Cuantitativa: Radar de Mercado y Retornos Cruzados")
 st.markdown(
-    "Flujo profesional en **3 Pasos**: **1º Descubridor Universal** (encuentra qué activos mueven a tu objetivo), "
-    "**2º Escáner de Combinaciones** (crea las mejores parejas/tríos con Z-Score y filtro de clones) y "
-    "**3º Auditoría de los 3 Modelos** (señal, Z-Score de convicción, Régimen SMA 200, Kelly y diagnóstico final)."
+    "Flujo profesional en **4 Pasos**: **0º Radar del Mercado Tradicional** (encuentra qué empresa, índice o materia prima vigilar hoy), "
+    "**1º Descubridor Universal** (encuentra sus predictores cruzados), **2º Escáner de Combinaciones** (crea las mejores parejas/tríos) y "
+    "**3º Auditoría de los 3 Modelos** (señal, Z-Score, Régimen SMA 200, Kelly y niveles en precio)."
 )
 
 # ---------------------------------------------------------
-# CATÁLOGO MAESTRO UNIVERSAL (~50 ACTIVOS LÍDERES DEL MUNDO)
+# CATÁLOGO TRADICIONAL PARA PESTAÑA 0 (~65 ACTIVOS SIN CRIPTO)
+# ---------------------------------------------------------
+TRADITIONAL_SCREENER_UNIVERSE = {
+    # Índices Bursátiles
+    "SPY": ("S&P 500 ETF", "Índices Bursátiles"),
+    "QQQ": ("Nasdaq 100 ETF", "Índices Bursátiles"),
+    "DIA": ("Dow Jones Industrial ETF", "Índices Bursátiles"),
+    "IWM": ("Russell 2000 Small Caps", "Índices Bursátiles"),
+    "^GDAXI": ("DAX 40 Alemania", "Índices Bursátiles"),
+    "^STOXX50E": ("Euro Stoxx 50 Europa", "Índices Bursátiles"),
+    "^IBEX": ("IBEX 35 España", "Índices Bursátiles"),
+    "^N225": ("Nikkei 225 Japón", "Índices Bursátiles"),
+    "EWZ": ("MSCI Brasil ETF", "Índices Bursátiles"),
+    "EEM": ("Mercados Emergentes ETF", "Índices Bursátiles"),
+    # ETFs Sectoriales Wall Street
+    "XLK": ("Sector Tecnología", "ETFs Sectoriales"),
+    "SMH": ("Sector Semiconductores", "ETFs Sectoriales"),
+    "XLF": ("Sector Financiero / Bancos", "ETFs Sectoriales"),
+    "XLE": ("Sector Energía", "ETFs Sectoriales"),
+    "XLV": ("Sector Salud", "ETFs Sectoriales"),
+    "XLI": ("Sector Industrial", "ETFs Sectoriales"),
+    "XLY": ("Consumo Discrecional", "ETFs Sectoriales"),
+    "XLP": ("Consumo Básico / Defensivo", "ETFs Sectoriales"),
+    "XLU": ("Utilidades / Eléctricas", "ETFs Sectoriales"),
+    "XLB": ("Materiales Básicos", "ETFs Sectoriales"),
+    "XLRE": ("Sector Inmobiliario (REITs)", "ETFs Sectoriales"),
+    "XLC": ("Servicios de Comunicación", "ETFs Sectoriales"),
+    "ITA": ("Aeroespacial y Defensa ETF", "ETFs Sectoriales"),
+    "XBI": ("Biotecnología ETF", "ETFs Sectoriales"),
+    # Acciones Líderes Tecnología y Semis
+    "NVDA": ("Nvidia Corp", "Acciones: Tecnología"),
+    "AAPL": ("Apple Inc", "Acciones: Tecnología"),
+    "MSFT": ("Microsoft Corp", "Acciones: Tecnología"),
+    "AMZN": ("Amazon.com", "Acciones: Tecnología"),
+    "META": ("Meta Platforms", "Acciones: Tecnología"),
+    "GOOGL": ("Alphabet / Google", "Acciones: Tecnología"),
+    "TSLA": ("Tesla Inc", "Acciones: Tecnología"),
+    "AVGO": ("Broadcom Inc", "Acciones: Tecnología"),
+    "AMD": ("Advanced Micro Devices", "Acciones: Tecnología"),
+    "TSM": ("Taiwan Semiconductor", "Acciones: Tecnología"),
+    "ASML": ("ASML Holding", "Acciones: Tecnología"),
+    "NFLX": ("Netflix Inc", "Acciones: Tecnología"),
+    "CRM": ("Salesforce Inc", "Acciones: Tecnología"),
+    "ORCL": ("Oracle Corp", "Acciones: Tecnología"),
+    # Acciones Líderes Finanzas, Salud, Consumo e Industria
+    "JPM": ("JPMorgan Chase", "Acciones: Finanzas y Salud"),
+    "BAC": ("Bank of America", "Acciones: Finanzas y Salud"),
+    "GS": ("Goldman Sachs", "Acciones: Finanzas y Salud"),
+    "V": ("Visa Inc", "Acciones: Finanzas y Salud"),
+    "MA": ("Mastercard Inc", "Acciones: Finanzas y Salud"),
+    "BRK-B": ("Berkshire Hathaway", "Acciones: Finanzas y Salud"),
+    "LLY": ("Eli Lilly (Farmacéutica)", "Acciones: Finanzas y Salud"),
+    "UNH": ("UnitedHealth Group", "Acciones: Finanzas y Salud"),
+    "JNJ": ("Johnson & Johnson", "Acciones: Finanzas y Salud"),
+    "WMT": ("Walmart Inc", "Acciones: Consumo e Industria"),
+    "COST": ("Costco Wholesale", "Acciones: Consumo e Industria"),
+    "HD": ("Home Depot", "Acciones: Consumo e Industria"),
+    "MCD": ("McDonald's Corp", "Acciones: Consumo e Industria"),
+    "KO": ("Coca-Cola Co", "Acciones: Consumo e Industria"),
+    "CAT": ("Caterpillar Inc", "Acciones: Consumo e Industria"),
+    "GE": ("GE Aerospace", "Acciones: Consumo e Industria"),
+    "XOM": ("Exxon Mobil", "Acciones: Consumo e Industria"),
+    "CVX": ("Chevron Corp", "Acciones: Consumo e Industria"),
+    # Materias Primas y Renta Fija
+    "GLD": ("Oro ETF", "Materias Primas y Bonos"),
+    "SLV": ("Plata ETF", "Materias Primas y Bonos"),
+    "CPER": ("Cobre ETF", "Materias Primas y Bonos"),
+    "USO": ("Petróleo WTI ETF", "Materias Primas y Bonos"),
+    "UNG": ("Gas Natural ETF", "Materias Primas y Bonos"),
+    "DBA": ("Agricultura Materias Primas", "Materias Primas y Bonos"),
+    "URA": ("Uranio y Energía Nuclear ETF", "Materias Primas y Bonos"),
+    "TLT": ("Bonos Tesoro EE.UU. +20 Años", "Materias Primas y Bonos"),
+    "IEF": ("Bonos Tesoro EE.UU. 7-10 Años", "Materias Primas y Bonos"),
+    "HYG": ("Bonos High Yield Corporativos", "Materias Primas y Bonos"),
+    "UUP": ("Índice Dólar Bullish ETF", "Materias Primas y Bonos")
+}
+
+# ---------------------------------------------------------
+# CATÁLOGO MAESTRO UNIVERSAL (PARA PESTAÑA 1: DESCUBRIDOR DE PREDICTORES)
 # ---------------------------------------------------------
 MASTER_UNIVERSE = {
-    # Índices EE.UU. y Globales
-    "SPY": ("S&P 500 ETF", "Índices EE.UU."),
-    "QQQ": ("Nasdaq 100 ETF", "Índices EE.UU."),
-    "DIA": ("Dow Jones ETF", "Índices EE.UU."),
-    "IWM": ("Russell 2000 Small Caps", "Índices EE.UU."),
-    "^GDAXI": ("DAX 40 Alemania", "Índices Globales"),
-    "^STOXX50E": ("Euro Stoxx 50", "Índices Globales"),
-    "^IBEX": ("IBEX 35 España", "Índices Globales"),
-    "^N225": ("Nikkei 225 Japón", "Índices Globales"),
-    "FXI": ("China Large-Cap ETF", "Índices Globales"),
-    "EEM": ("Mercados Emergentes ETF", "Índices Globales"),
-    # Sectores Oficiales Wall Street (SPDR + Semis)
-    "XLK": ("Sector Tecnología", "Sectores EE.UU."),
-    "SMH": ("Sector Semiconductores", "Sectores EE.UU."),
-    "XLF": ("Sector Financiero / Bancos", "Sectores EE.UU."),
-    "XLE": ("Sector Energía", "Sectores EE.UU."),
-    "XLV": ("Sector Salud", "Sectores EE.UU."),
-    "XLI": ("Sector Industrial", "Sectores EE.UU."),
-    "XLY": ("Consumo Discrecional", "Sectores EE.UU."),
-    "XLP": ("Consumo Básico / Defensivo", "Sectores EE.UU."),
-    "XLU": ("Utilidades / Eléctricas", "Sectores EE.UU."),
-    "XLB": ("Materiales Básicos", "Sectores EE.UU."),
-    "XLRE": ("Sector Inmobiliario (REITs)", "Sectores EE.UU."),
-    "XLC": ("Servicios de Comunicación", "Sectores EE.UU."),
-    # Macro, Bonos y Volatilidad
-    "TLT": ("Bonos Tesoro EE.UU. +20 Años", "Macro y Renta Fija"),
-    "IEF": ("Bonos Tesoro EE.UU. 7-10 Años", "Macro y Renta Fija"),
-    "SHY": ("Bonos Tesoro EE.UU. 1-3 Años", "Macro y Renta Fija"),
-    "HYG": ("Bonos Alto Rendimiento (High Yield)", "Macro y Renta Fija"),
-    "LQD": ("Bonos Corporativos Grado Inversión", "Macro y Renta Fija"),
+    **TRADITIONAL_SCREENER_UNIVERSE,
     "^VIX": ("Índice de Volatilidad S&P 500", "Macro y Renta Fija"),
-    "UUP": ("Dólar Estadounidense Bullish ETF", "Macro y Renta Fija"),
-    # Materias Primas y Divisas
-    "GLD": ("Oro ETF", "Materias Primas y Forex"),
-    "SLV": ("Plata ETF", "Materias Primas y Forex"),
-    "USO": ("Petróleo WTI ETF", "Materias Primas y Forex"),
-    "CPER": ("Cobre ETF (Termómetro Industrial)", "Materias Primas y Forex"),
-    "DBA": ("Agricultura Materias Primas", "Materias Primas y Forex"),
+    "SHY": ("Bonos Tesoro EE.UU. 1-3 Años", "Macro y Renta Fija"),
+    "LQD": ("Bonos Corporativos Grado Inversión", "Macro y Renta Fija"),
     "EURUSD=X": ("Euro / Dólar", "Materias Primas y Forex"),
     "USDJPY=X": ("Dólar / Yen Japonés", "Materias Primas y Forex"),
     "GBPUSD=X": ("Libra / Dólar", "Materias Primas y Forex"),
-    # Mega-Caps (7 Magníficas + Líderes)
-    "NVDA": ("Nvidia Corp", "Acciones Líderes"),
-    "AAPL": ("Apple Inc", "Acciones Líderes"),
-    "MSFT": ("Microsoft Corp", "Acciones Líderes"),
-    "AMZN": ("Amazon.com", "Acciones Líderes"),
-    "META": ("Meta Platforms", "Acciones Líderes"),
-    "GOOGL": ("Alphabet / Google", "Acciones Líderes"),
-    "TSLA": ("Tesla Inc", "Acciones Líderes"),
-    "AMD": ("Advanced Micro Devices", "Acciones Líderes"),
-    "TSM": ("Taiwan Semiconductor", "Acciones Líderes"),
-    "JPM": ("JPMorgan Chase", "Acciones Líderes"),
-    "XOM": ("Exxon Mobil", "Acciones Líderes"),
-    # Cripto Líderes
     "BTC-USD": ("Bitcoin", "Criptoactivos"),
     "ETH-USD": ("Ethereum", "Criptoactivos"),
     "SOL-USD": ("Solana", "Criptoactivos"),
@@ -127,19 +158,22 @@ presets = {
 
 preset_choice = st.sidebar.selectbox("Plantillas rápidas de mercado:", list(presets.keys()))
 
+if "custom_target_str" not in st.session_state:
+    st.session_state.custom_target_str = presets[preset_choice]["target"]
 if "custom_predictors_str" not in st.session_state:
     st.session_state.custom_predictors_str = presets[preset_choice]["predictors"]
 if "last_preset" not in st.session_state:
     st.session_state.last_preset = preset_choice
 
 if st.session_state.last_preset != preset_choice:
+    st.session_state.custom_target_str = presets[preset_choice]["target"]
     st.session_state.custom_predictors_str = presets[preset_choice]["predictors"]
     st.session_state.last_preset = preset_choice
 
 target_ticker = st.sidebar.text_input(
     "🎯 Activo Objetivo a Operar (X):",
-    value=presets[preset_choice]["target"],
-    help="Escribe cualquier ticker de Yahoo Finance (ej. SPY, NVDA, ^IBEX, BTC-USD, GC=F)."
+    key="custom_target_str",
+    help="Escribe cualquier ticker de Yahoo Finance o envíalo con 1 clic desde la Pestaña 0."
 ).strip().upper()
 
 predictors_input = st.sidebar.text_area(
@@ -176,7 +210,7 @@ training_mode = st.sidebar.radio(
     "🧠 Modo de Aprendizaje del Modelo:",
     options=["Estático (Clásico Train/Test)", "Ventana Móvil Adaptativa (Rolling)"],
     index=0,
-    help="Estático congela los pesos aprendidos en Train. Ventana Móvil re-entrena el modelo periódicamente con los últimos N días para adaptarse al mercado actual."
+    help="Estático congela los pesos aprendidos en Train. Ventana Móvil re-entrena el modelo periódicamente con los últimos N días."
 )
 
 rolling_window_days = 252
@@ -207,12 +241,11 @@ regime_filter_mode = st.sidebar.selectbox(
         "Desactivado (Operar Long y Short libremente)",
         "Solo operar a favor de la SMA 200 (Tendencia Mayor)"
     ],
-    index=0,
-    help="Si lo activas, el backtest solo abrirá LONG cuando el activo X esté por encima de su media de 200 días y solo abrirá SHORT cuando esté por debajo."
+    index=0
 )
 
 # ---------------------------------------------------------
-# MOTOR DE DATOS ROBUSTO (POR BLOQUES Y ANCLADO A TARGET X)
+# MOTOR DE DATOS ROBUSTO Y EXPONENTE DE HURST
 # ---------------------------------------------------------
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_aligned_market_data(target_sym, candidate_syms, years):
@@ -262,6 +295,128 @@ def load_aligned_market_data(target_sym, candidate_syms, years):
     master_df = master_df.ffill().dropna()
     return master_df
 
+def calculate_hurst_exponent(price_series, max_lag=20):
+    """Calcula el Exponente de Hurst (H) para medir memoria estadística:
+    H > 0.55 = Persistencia Tendencial | H < 0.45 = Reversión a la Media | ~0.50 = Ruido Aleatorio"""
+    s = np.log(price_series.dropna().values)
+    if len(s) < 100:
+        return 0.50
+    lags = range(2, max_lag + 1)
+    tau = [np.std(np.subtract(s[lag:], s[:-lag])) for lag in lags]
+    if any(t <= 0 for t in tau):
+        return 0.50
+    poly = np.polyfit(np.log(list(lags)), np.log(tau), 1)
+    return float(np.clip(poly[0], 0.05, 0.95))
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def run_market_screener(categories_selected, z_window_days=7):
+    tickers_to_scan = [
+        t for t, info in TRADITIONAL_SCREENER_UNIVERSE.items()
+        if info[1] in categories_selected
+    ]
+    if "SPY" not in tickers_to_scan:
+        tickers_to_scan.append("SPY")
+
+    df_closes = load_aligned_market_data("SPY", tickers_to_scan, 2)
+    if df_closes.empty or "SPY" not in df_closes.columns:
+        return []
+
+    spy_ret_6m = float((df_closes["SPY"].iloc[-1] / df_closes["SPY"].iloc[-126]) - 1.0) * 100.0 if len(df_closes) >= 126 else 0.0
+
+    rows = []
+    for sym in tickers_to_scan:
+        if sym not in df_closes.columns:
+            continue
+        series = df_closes[sym].dropna()
+        if len(series) < 200:
+            continue
+
+        curr_price = float(series.iloc[-1])
+        sma50 = float(series.rolling(50).mean().iloc[-1])
+        sma200 = float(series.rolling(200).mean().iloc[-1])
+        dist_sma200 = ((curr_price / sma200) - 1.0) * 100.0
+
+        if curr_price >= sma200 and curr_price >= sma50:
+            regime_str = "🟢 Alcista Fuerte (>SMA50 y 200)"
+        elif curr_price >= sma200 and curr_price < sma50:
+            regime_str = "🟡 En Pullback (>SMA200, <SMA50)"
+        else:
+            regime_str = "🔴 Bajista (<SMA200)"
+
+        # Retorno y Z-Score en la ventana elegida (ej. 7 días)
+        rets_nd = series.pct_change(z_window_days).dropna()
+        curr_ret_nd = float(rets_nd.iloc[-1] * 100.0)
+        mean_nd = float(rets_nd.mean())
+        std_nd = float(rets_nd.std())
+        z_score = float((rets_nd.iloc[-1] - mean_nd) / std_nd) if std_nd > 1e-9 else 0.0
+
+        # Rendimiento a 6 meses (126 sesiones), Sharpe 6m y Alpha vs SPY
+        daily_rets_6m = series.pct_change().dropna().iloc[-126:]
+        ret_6m = float((series.iloc[-1] / series.iloc[-126]) - 1.0) * 100.0
+        alpha_spy_6m = ret_6m - spy_ret_6m
+        std_d = float(daily_rets_6m.std())
+        sharpe_6m = float((daily_rets_6m.mean() / std_d) * np.sqrt(252.0)) if std_d > 1e-9 else 0.0
+
+        # Exponente de Hurst (último año 252 sesiones)
+        hurst = calculate_hurst_exponent(series.iloc[-252:])
+        if hurst >= 0.55:
+            hurst_type = f"📈 Tendencial ({hurst:.2f})"
+        elif hurst <= 0.45:
+            hurst_type = f"🔄 Péndulo / Reversión ({hurst:.2f})"
+        else:
+            hurst_type = f"🎲 Ruido Aleatorio ({hurst:.2f})"
+
+        # Ratio de Compresión de Volatilidad (Vol 10d / Vol 126d)
+        vol_10d = float(daily_rets_6m.iloc[-10:].std())
+        vol_ratio = float(vol_10d / std_d) if std_d > 1e-9 else 1.0
+
+        # Puntuaciones por perfil (0 a 100)
+        dip_score = max(0.0, min(100.0, (50.0 if curr_price >= sma200 else 10.0) + (-z_score * 20.0) + (sharpe_6m * 10.0)))
+        mom_score = max(0.0, min(100.0, (40.0 if curr_price >= sma50 >= sma200 else 0.0) + (sharpe_6m * 20.0) + (alpha_spy_6m * 1.0)))
+        hurst_score = max(0.0, min(100.0, abs(hurst - 0.50) * 250.0 + max(0.0, sharpe_6m * 15.0)))
+        squeeze_score = max(0.0, min(100.0, (1.2 - vol_ratio) * 80.0 + (20.0 if curr_price >= sma200 else 0.0)))
+
+        # Diagnóstico automático
+        if curr_price >= sma200 and z_score <= -1.2:
+            diag = "🏹 BUY THE DIP: Alcista de fondo con sobreventa estadística a corto plazo"
+        elif curr_price >= sma50 >= sma200 and sharpe_6m >= 1.2 and z_score < 1.8:
+            diag = "🚀 LÍDER MOMENTUM: Tendencia institucional limpia con Alpha positivo"
+        elif vol_ratio <= 0.65:
+            diag = "💥 COMPRESIÓN EXTREMA: Muelle de volatilidad comprimido (explosión inminente)"
+        elif hurst >= 0.57:
+            diag = "📈 PERSISTENCIA ALTA: Activo de fuerte memoria tendencial (Hurst alto)"
+        elif hurst <= 0.43:
+            diag = "🔄 PÉNDULO ESTADÍSTICO: Activo de fuerte reversión a la media (Hurst bajo)"
+        elif z_score >= 2.0:
+            diag = "⚠️ SOBRECOMPRA EXTREMA: Estirado > +2σ a corto plazo (riesgo de corrección)"
+        else:
+            diag = "〰️ En Rango Normal / Sin extremo estadístico"
+
+        name_desc, cat_name = TRADITIONAL_SCREENER_UNIVERSE.get(sym, (sym, "Mercado Tradicional"))
+        rows.append({
+            "Ticker": sym,
+            "Nombre": name_desc,
+            "Categoría": cat_name,
+            "Precio Actual": round(curr_price, 2),
+            "Régimen Técnico": regime_str,
+            "Dist. SMA 200 (%)": round(dist_sma200, 1),
+            f"Retorno ({z_window_days}d %)": round(curr_ret_nd, 2),
+            f"Z-Score ({z_window_days}d σ)": round(z_score, 2),
+            "Sharpe (6m)": round(sharpe_6m, 2),
+            "Alpha vs SPY (6m %)": round(alpha_spy_6m, 1),
+            "Hurst (H)": round(hurst, 2),
+            "Personalidad (Hurst)": hurst_type,
+            "Compresión Vol (10d/6m)": round(vol_ratio, 2),
+            "Diagnóstico Cuantitativo": diag,
+            "_dip_score": round(dip_score, 1),
+            "_mom_score": round(mom_score, 1),
+            "_hurst_score": round(hurst_score, 1),
+            "_squeeze_score": round(squeeze_score, 1),
+            "_above_sma200": curr_price >= sma200,
+            "_above_sma50": curr_price >= sma50
+        })
+    return rows
+
 def evaluate_strategy(
     df_returns, df_closes, target_col, feature_cols, horizon_days, train_ratio,
     fee_pct=0.05, threshold_pct=0.10, is_rolling=False, roll_win=252, use_sma200_filter=False
@@ -272,11 +427,9 @@ def evaluate_strategy(
     for col in feature_cols:
         df[col] = df_returns[col]
 
-    # Calcular Régimen SMA 200 del activo objetivo X
     sma200_series = df_closes[target_col].rolling(200, min_periods=50).mean()
     above_sma200 = (df_closes[target_col] >= sma200_series).reindex(df_returns.index).fillna(True)
 
-    # Calcular Z-Score actual de cada predictor (desviaciones estándar respecto a su media histórica)
     latest_features_series = df_returns[feature_cols].iloc[-1]
     feat_means = df_returns[feature_cols].mean()
     feat_stds = df_returns[feature_cols].std().replace(0, 1e-9)
@@ -289,7 +442,6 @@ def evaluate_strategy(
     y_all = df_model["Target_Future"].values
     n_samples = len(df_model)
 
-    # Entrenamiento Estático vs. Ventana Móvil Adaptativa (Rolling Walk-Forward)
     if not is_rolling:
         X_train = X_all[:split_idx]
         y_train = y_all[:split_idx]
@@ -300,7 +452,6 @@ def evaluate_strategy(
         preds = intercept + X_all.dot(weights)
         live_pred = float(intercept + latest_features_series.values.dot(weights))
     else:
-        # Modelo inicial en el tramo Train
         X_train_init = X_all[:split_idx]
         y_train_init = y_all[:split_idx]
         base_model = LinearRegression()
@@ -308,8 +459,6 @@ def evaluate_strategy(
         preds = np.zeros(n_samples)
         preds[:split_idx] = base_model.intercept_ + X_train_init.dot(base_model.coef_)
 
-        # En el tramo Test (Out-of-Sample), re-entrenar en bloques de 10 sesiones usando los últimos 'roll_win' días
-        # dejando siempre un margen de seguridad de 'horizon_days' para no tener fuga de datos futuros
         step_retrain = 10
         curr_w = base_model.coef_.copy()
         curr_b = float(base_model.intercept_)
@@ -325,7 +474,6 @@ def evaluate_strategy(
             end_block = min(t + step_retrain, n_samples)
             preds[t:end_block] = curr_b + X_all[t:end_block].dot(curr_w)
 
-        # Ajuste final con la ventana móvil más reciente disponible hoy para la predicción en vivo
         final_start = max(0, n_samples - roll_win)
         m_live = LinearRegression()
         m_live.fit(X_all[final_start:], y_all[final_start:])
@@ -335,12 +483,10 @@ def evaluate_strategy(
 
     df_model["Pred"] = preds
 
-    # Calcular el Z-Score de Convicción de la Señal de Hoy comparada con el historial de predicciones
     pred_mean = float(np.mean(preds[:split_idx]))
     pred_std = float(np.std(preds[:split_idx]))
     signal_zscore = (live_pred - pred_mean) / pred_std if pred_std > 1e-9 else 0.0
 
-    # Aplicar Umbral Mínimo y Filtro opcional de Régimen SMA 200
     thresh_dec = threshold_pct / 100.0
     fee_dec = fee_pct / 100.0
 
@@ -387,7 +533,6 @@ def evaluate_strategy(
         total_pnl = float(eq.iloc[-1]) if len(eq) > 0 else 0.0
         trades_pct = float((len(active_series) / len(full_series)) * 100.0)
 
-        # Cálculo del Criterio de Kelly Fraccionado (Half-Kelly para gestión prudente de capital)
         wins = active_series[active_series > 0]
         losses = active_series[active_series < 0]
         if len(wins) > 0 and len(losses) > 0:
@@ -448,7 +593,6 @@ if len(closes_df) < horizon * 10:
 returns_df = closes_df.pct_change(horizon).dropna()
 current_target_price = float(closes_df[target_ticker].iloc[-1])
 
-# Estado actual del Régimen Macro (SMA 200) del activo objetivo X
 sma200_val = float(closes_df[target_ticker].rolling(200, min_periods=50).mean().iloc[-1])
 is_bull_regime = current_target_price >= sma200_val
 sma200_dist_pct = ((current_target_price / sma200_val) - 1.0) * 100.0
@@ -456,7 +600,6 @@ sma200_dist_pct = ((current_target_price / sma200_val) - 1.0) * 100.0
 is_rolling_mode = (training_mode == "Ventana Móvil Adaptativa (Rolling)")
 use_sma_filter = (regime_filter_mode != "Desactivado (Operar Long y Short libremente)")
 
-# Evaluación del Modelo 1 Base (AR)
 ar_res = evaluate_strategy(
     returns_df, closes_df, target_ticker, [target_ticker], horizon, train_pct,
     commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
@@ -582,21 +725,161 @@ def run_full_scanner(returns_data, closes_data, target, candidates, horizon_days
     return rows, len(combos), clones_filtered
 
 # ---------------------------------------------------------
-# ESTRUCTURA DE 3 PESTAÑAS EN ORDEN DE FLUJO DE TRABAJO
+# ESTRUCTURA DE 4 PESTAÑAS (PESTAÑA 0 AL INICIO)
 # ---------------------------------------------------------
-tab_discovery, tab_scanner, tab_models = st.tabs([
+tab_screener0, tab_discovery, tab_scanner, tab_models = st.tabs([
+    "🎯 0. Radar de Oportunidades del Mercado (Sin Cripto)",
     "🌍 1. Descubridor Universal de Activos",
     "🔍 2. Escáner de Combinaciones (Radar de Parejas)",
     "📊 3. Auditoría de los 3 Modelos"
 ])
 
 # =========================================================
+# PESTAÑA 0: RADAR DE OPORTUNIDADES DEL MERCADO TRADICIONAL
+# =========================================================
+with tab_screener0:
+    st.subheader("🎯 Radar Cuantitativo del Mercado Tradicional (Acciones, Índices, Sectores y Materias Primas)")
+    st.markdown(
+        "Esta pestaña peina **~65 activos líderes del mercado real (0% Cripto)** mediante 4 lentes estadísticas "
+        "(**Z-Score**, **Ratio de Sharpe / Alpha**, **Exponente de Hurst $H$** y **Compresión de Volatilidad**) "
+        "para decirte qué empresas, índices o materias primas presentan hoy la mejor configuración operativa."
+    )
+
+    trad_categories = list(dict.fromkeys([info[1] for info in TRADITIONAL_SCREENER_UNIVERSE.values()]))
+
+    col_s0_1, col_s0_2, col_s0_3 = st.columns([1.5, 1.5, 1])
+    hunting_profile = col_s0_1.selectbox(
+        "🔭 Lente Estadística / Estrategia de Búsqueda:",
+        [
+            "🏹 1. Cazador de Gomas Estiradas (Buy the Dip en Tendencia Alcista)",
+            "🚀 2. Líderes de Momentum Puro y Alpha Institucional",
+            "🧬 3. Detector de Memoria Estadística (Exponente de Hurst Fuerte)",
+            "💥 4. Compresión de Volatilidad (Squeeze antes de Explosión)",
+            "🛠️ 5. Vista Completa Personalizada (Todos los Activos)"
+        ],
+        index=0
+    )
+    selected_trad_cats = col_s0_2.multiselect(
+        "Sectores / Categorías a peinar:",
+        options=trad_categories,
+        default=trad_categories
+    )
+    z_win_screener = col_s0_3.slider(
+        "Ventana para medir Z-Score (Días):",
+        min_value=3, max_value=20, value=horizon,
+        help="Días usados para medir si un activo está sobrevendido (-Z) o sobrecomprado (+Z) a corto plazo."
+    )
+
+    if st.button("🔎 Peinar el Mercado Tradicional Ahora", type="primary"):
+        with st.spinner("Calculando Z-Scores, Sharpe, Alpha, Exponente de Hurst y Compresión en ~65 activos tradicionales..."):
+            st.session_state.screener0_data = run_market_screener(selected_trad_cats, z_win_screener)
+            st.session_state.screener0_zwin = z_win_screener
+
+    if "screener0_data" in st.session_state and st.session_state.screener0_data:
+        raw_s0_df = pd.DataFrame(st.session_state.screener0_data)
+        z_col_name = f"Z-Score ({st.session_state.screener0_zwin}d σ)"
+
+        # Aplicar filtros y ordenación según el Perfil de Caza elegido
+        df_s0 = raw_s0_df.copy()
+        if hunting_profile.startswith("🏹 1."):
+            st.info(
+                "**🏹 Lente Activa — Buy the Dip Cuantitativo:** Muestra activos que están en **Tendencia Alcista Mayor (Precio > SMA 200)** "
+                "pero que acaban de sufrir un castigo estadístico a corto plazo (**Z-Score negativo**), ofreciendo una entrada barata a favor de la tendencia."
+            )
+            df_s0["Score Perfil (0-100)"] = df_s0["_dip_score"]
+            df_s0 = df_s0[df_s0["_above_sma200"] & (df_s0[z_col_name] <= -0.3)].sort_values(by=z_col_name, ascending=True)
+            if df_s0.empty:
+                st.warning("Hoy ningún activo alcista supera el nivel de sobreventa fuerte; mostrando los más cercanos a sobreventa en tendencia alcista:")
+                df_s0 = raw_s0_df[raw_s0_df["_above_sma200"]].copy()
+                df_s0["Score Perfil (0-100)"] = df_s0["_dip_score"]
+                df_s0 = df_s0.sort_values(by=z_col_name, ascending=True)
+
+        elif hunting_profile.startswith("🚀 2."):
+            st.info(
+                "**🚀 Lente Activa — Líderes de Momentum y Alpha:** Filtra empresas, índices y materias primas que baten al S&P 500 (**Alpha > 0**), "
+                "con **Precio > SMA 50 y SMA 200**, ordenados por su limpieza de subida (**Sharpe 6m**) y sin estar en sobrecompra extrema ($\text{Z-Score} < +2.0\sigma$)."
+            )
+            df_s0["Score Perfil (0-100)"] = df_s0["_mom_score"]
+            df_s0 = df_s0[df_s0["_above_sma200"] & df_s0["_above_sma50"] & (df_s0[z_col_name] < 2.0)].sort_values(by="Sharpe (6m)", ascending=False)
+
+        elif hunting_profile.startswith("🧬 3."):
+            st.info(
+                "**🧬 Lente Activa — Detector de Memoria (Exponente de Hurst $H$):** Descarta los activos que se mueven al azar ($H \approx 0.50$) "
+                "y destaca aquellos con **fuerte memoria tendencial ($H \ge 0.55$)** o **fuerte comportamiento de péndulo/reversión ($H \le 0.45$)**."
+            )
+            df_s0["Score Perfil (0-100)"] = df_s0["_hurst_score"]
+            df_s0 = df_s0[(df_s0["Hurst (H)"] >= 0.55) | (df_s0["Hurst (H)"] <= 0.45)].sort_values(by="Score Perfil (0-100)", ascending=False)
+
+        elif hunting_profile.startswith("💥 4."):
+            st.info(
+                "**💥 Lente Activa — Compresión de Volatilidad (*Squeeze*):** Ordena los activos donde la volatilidad de los últimos 10 días "
+                "se ha reducido drásticamente respecto a su media de 6 meses (**Compresión < 0.75**), señalando calma antes de un movimiento brusco."
+            )
+            df_s0["Score Perfil (0-100)"] = df_s0["_squeeze_score"]
+            df_s0 = df_s0.sort_values(by="Compresión Vol (10d/6m)", ascending=True)
+
+        else:
+            df_s0["Score Perfil (0-100)"] = df_s0["_mom_score"]
+            df_s0 = df_s0.sort_values(by="Sharpe (6m)", ascending=False)
+
+        df_s0 = df_s0.reset_index(drop=True)
+        visible_cols = [c for c in df_s0.columns if not c.startswith("_")]
+
+        st.success(f"✅ **{len(df_s0)} oportunidades tradicionales encontradas** bajo el criterio seleccionado:")
+        st.dataframe(df_s0[visible_cols], use_container_width=True, hide_index=True)
+
+        # Descarga Excel de la Pestaña 0
+        excel_p0 = convert_dfs_to_excel({"Radar_Mercado_Tradicional": df_s0[visible_cols]})
+        st.download_button(
+            label="📥 Descargar Informe del Radar Tradicional en Excel (.xlsx)",
+            data=excel_p0,
+            file_name=f"Radar_Oportunidades_Tradicional_{datetime.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        st.divider()
+        st.markdown("### 🎯 Puente Directo: Enviar un Activo del Radar para Analizar sus Retornos Cruzados")
+        col_bridge1, col_bridge2 = st.columns([2, 1.2])
+
+        s0_options = [
+            f"{row['Ticker']} — {row['Nombre']}  |  [{row['Diagnóstico Cuantitativo']}]"
+            for _, row in df_s0.iterrows()
+        ]
+        chosen_s0 = col_bridge1.selectbox(
+            "Selecciona la empresa, índice o materia prima que quieres investigar a fondo:",
+            options=s0_options,
+            index=0
+        )
+        chosen_s0_ticker = chosen_s0.split(" — ")[0].strip()
+
+        def set_target_from_screener(new_target):
+            st.session_state.custom_target_str = new_target
+
+        with col_bridge2:
+            st.write("")
+            st.button(
+                f"🎯 Fijar `{chosen_s0_ticker}` como Activo Objetivo (X) en toda la App",
+                on_click=set_target_from_screener,
+                args=(chosen_s0_ticker,),
+                type="secondary"
+            )
+        st.caption(
+            f"💡 Al pulsar este botón, **`{chosen_s0_ticker}`** se colocará automáticamente como tu **Activo Objetivo (X)** en la barra lateral "
+            f"para que puedas ir a la **Pestaña 1, 2 y 3** a buscar sus mejores retornos cruzados."
+        )
+    else:
+        st.info(
+            "👆 Elige tu **Lente Estadística** arriba y pulsa **🔎 Peinar el Mercado Tradicional Ahora** "
+            "para descubrir las mejores acciones, índices y materias primas del momento."
+        )
+
+# =========================================================
 # PESTAÑA 1: DESCUBRIDOR UNIVERSAL DE ACTIVOS
 # =========================================================
 with tab_discovery:
-    st.subheader(f"🌍 Descubridor Universal de Candidatos para `{target_ticker}`")
+    st.subheader(f"🌍 Descubridor Universal de Candidatos Cruzados para `{target_ticker}`")
     st.markdown(
-        f"Rastrea un **Catálogo Maestro de ~50 activos líderes mundiales** en modo **{training_mode}**, "
+        f"Rastrea qué activos del mundo predicen mejor el futuro de **`{target_ticker}`** en modo **{training_mode}**, "
         f"descontando **`{commission_pct:.2f}%`** de comisión y exigiendo un umbral de **`{min_threshold_pct:.2f}%`**."
     )
 
@@ -606,7 +889,7 @@ with tab_discovery:
     selected_cats = col_d1.multiselect(
         "Categorías del Universo Maestro a rastrear:",
         options=all_categories,
-        default=all_categories
+        default=[c for c in all_categories if c != "Criptoactivos"]
     )
     top_n_to_send = col_d2.slider("Nº de mejores candidatos a seleccionar:", min_value=4, max_value=15, value=8)
     discovery_sort = col_d3.selectbox(
@@ -616,8 +899,8 @@ with tab_discovery:
     )
     only_positive_test = col_d4.checkbox("Solo Test > 0%", value=True)
 
-    if st.button(f"🚀 Rastrear el Mercado Mundial para `{target_ticker}`", type="primary"):
-        with st.spinner(f"Descargando bloques seguros y evaluando ~50 activos globales frente a `{target_ticker}`..."):
+    if st.button(f"🚀 Rastrear Predictores Cruzados para `{target_ticker}`", type="primary"):
+        with st.spinner(f"Descargando bloques seguros y evaluando predictores globales frente a `{target_ticker}`..."):
             disc_res, eval_cnt = run_universal_discovery(
                 target_ticker, years_back, horizon, train_pct, selected_cats, only_positive_test,
                 commission_pct, min_threshold_pct, is_rolling_mode, rolling_window_days, use_sma_filter
@@ -638,7 +921,7 @@ with tab_discovery:
             top_tickers_str = ", ".join(top_tickers_list)
 
             st.success(
-                f"✅ **¡Rastreo completado con éxito!** ({eval_cnt} activos globales descargados y alineados al calendario de `{target_ticker}`). "
+                f"✅ **¡Rastreo completado con éxito!** ({eval_cnt} activos descargados y alineados al calendario de `{target_ticker}`). "
                 f"Mostrando **{len(disc_df)} candidatos** ordenados por **{discovery_sort}**:"
             )
             st.dataframe(disc_df, use_container_width=True, hide_index=True)
@@ -665,8 +948,8 @@ with tab_discovery:
             )
     else:
         st.info(
-            f"👆 Pulsa el botón **Rastrear el Mercado Mundial para `{target_ticker}`** para descubrir automáticamente qué activos mueven a `{target_ticker}`, "
-            f"o pasa directamente a la **Pestaña 2** si ya tienes tus propios candidatos en la barra lateral."
+            f"👆 Pulsa el botón **Rastrear Predictores Cruzados para `{target_ticker}`** para descubrir automáticamente qué activos anticipan a `{target_ticker}`, "
+            f"o pasa directamente a la **Pestaña 2** si ya tienes tus candidatos en la barra lateral."
         )
 
 # =========================================================
@@ -838,17 +1121,14 @@ with tab_models:
         stop_price = current_target_price
         suggested_pos_pct = 0.0
 
-    # Alerta si la señal va en contra de la tendencia mayor SMA 200
     regime_label = f"🐂 ALCISTA (> SMA 200 en {sma200_dist_pct:+.1f}%)" if is_bull_regime else f"🐻 BAJISTA (< SMA 200 en {sma200_dist_pct:+.1f}%)"
 
-    # Fila 1 de Métricas: Consenso, Ganador, Señal y Convicción Z-Score
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Estado de Consenso (3 Modelos)", consensus_banner)
     c2.metric("⭐ Modelo Ganador (Out-of-Sample)", f"Modelo {best_model['id']}")
     c3.metric(f"Señal del Ganador ({horizon}d)", f"{best_dir} ({best_pred:+.2f}%)")
     c4.metric("Z-Score de la Señal Hoy", z_badge, delta=f"Win Rate 90d: {best_model['res']['recent_metrics']['win_rate']:.1f}%")
 
-    # Fila 2 de Métricas: Niveles en Precio, Stop Estadístico, Régimen SMA 200 y Tamaño Kelly
     p1, p2, p3, p4 = st.columns(4)
     p1.metric(f"Precio Actual `{target_ticker}`", f"{current_target_price:,.2f}", delta=regime_label, delta_color="normal" if is_bull_regime else "inverse")
     p2.metric(f"🎯 Precio Objetivo Proyectado ({horizon}d)", f"{target_price:,.2f}", delta=f"{best_pred:+.2f}%")
@@ -894,7 +1174,6 @@ with tab_models:
     comp_df = pd.DataFrame(comp_rows)
     st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-    # Construcción de la tabla de radiografía con Z-Score de cada activo predictor
     def build_weights_df(res_obj):
         rows_w = []
         for f, w in zip(res_obj["features"], res_obj["weights"]):
@@ -930,7 +1209,6 @@ with tab_models:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-    # Gráfico conjunto de las 3 curvas de equidad
     fig_eq = go.Figure()
     fig_eq.add_trace(go.Scatter(
         x=ar_res["df_model"].index, y=ar_res["df_model"]["Equity_Curve"],
@@ -969,9 +1247,6 @@ with tab_models:
 
     st.divider()
 
-    # ---------------------------------------------------------
-    # FUNCIÓN AUXILIAR PARA PINTAR LA RADIOGRAFÍA DE CADA MODELO
-    # ---------------------------------------------------------
     def render_model_radiography(res_obj):
         col_t, col_g = st.columns([1.35, 1])
         w_df = build_weights_df(res_obj)
